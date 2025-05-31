@@ -6,7 +6,7 @@
 #include "oreshnek/http/HttpResponse.h"
 #include "oreshnek/http/HttpEnums.h"
 #include <functional>
-#include <string>
+#include <string> // Use std::string for map keys to own data
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -23,9 +23,11 @@ struct RouterNode;
 
 // Represents a node in the routing tree
 struct RouterNode {
-    std::unordered_map<std::string_view, std::unique_ptr<RouterNode>> children;
+    // CAMBIO: Cambiado de std::string_view a std::string para las claves
+    std::unordered_map<std::string, std::unique_ptr<RouterNode>> children;
     std::unique_ptr<RouterNode> param_child; // Child for path parameters (e.g., :id)
-    std::string_view param_name; // Stores the name of the parameter for param_child
+    // CAMBIO: Cambiado de std::string_view a std::string para param_name
+    std::string param_name; // Stores the name of the parameter for param_child
 
     // Handlers for different HTTP methods at this node
     std::unordered_map<Http::HttpMethod, RouteHandler> handlers;
@@ -53,6 +55,7 @@ private:
                                std::vector<std::string_view>::const_iterator path_segment_it,
                                std::vector<std::string_view>::const_iterator path_segment_end,
                                Http::HttpMethod method,
+                               // path_params_out puede seguir usando string_view, ya que apuntan a la ruta de la solicitud HTTP actual.
                                std::unordered_map<std::string_view, std::string_view>& path_params_out,
                                RouteHandler& matched_handler_out) const;
 
@@ -69,6 +72,7 @@ public:
 
 private:
     // Helper to split a path into segments (e.g., "/api/users/:id" -> ["api", "users", ":id"])
+    // Retorna string_views que apuntan a la cadena original `path` (que debe tener una vida útil suficiente).
     std::vector<std::string_view> split_path_to_segments(std::string_view path) const;
 };
 
