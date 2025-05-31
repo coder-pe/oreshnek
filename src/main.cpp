@@ -2,7 +2,7 @@
 #include "oreshnek/Oreshnek.h" // Include the convenience header
 #include "oreshnek/platform/DatabaseManager.h" // Include your DatabaseManager
 #include "oreshnek/platform/SecurityUtils.h"   // Include your SecurityUtils
-#include "oreshnek/platform/Models.h" // Assuming this holds User, Video, etc. if not in DatabaseManager.h
+// #include "oreshnek/platform/Models.h" // Assuming this holds User, Video, etc. if not in DatabaseManager.h
 
 #include <iostream>
 #include <signal.h>
@@ -242,15 +242,15 @@ int main() {
         <div class="container">
             <div class="features-grid">
                 <div class="feature-card">
-                    <h3>🎯 Contenido de Calidad</h3>
+                    <h3>Contenido de Calidad</h3>
                     <p>Tutoriales creados por expertos en programación con años de experiencia</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🚀 Tecnologías Modernas</h3>
+                    <h3>Tecnologías Modernas</h3>
                     <p>Aprende las últimas tecnologías y frameworks más demandados</p>
                 </div>
                 <div class="feature-card">
-                    <h3>👥 Comunidad Activa</h3>
+                    <h3>Comunidad Activa</h3>
                     <p>Interactúa con otros estudiantes y instructores en los comentarios</p>
                 </div>
             </div>
@@ -673,9 +673,9 @@ int main() {
         <div class="video-info">
             <h1 class="video-title" id="video-title">Cargando...</h1>
             <div class="video-meta" id="video-meta">
-                👀 <span id="views">0</span> visualizaciones • 
-                ❤️ <span id="likes">0</span> likes • 
-                📅 <span id="date">Fecha</span>
+                <span id="views">0</span> visualizaciones • 
+                <span id="likes">0</span> likes • 
+                <span id="date">Fecha</span>
             </div>
             <div class="video-description" id="video-description">
                 Cargando descripción...

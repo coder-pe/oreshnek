@@ -3,7 +3,7 @@
 #define ORESHNEK_NET_CONNECTION_H
 
 #include "oreshnek/http/HttpRequest.h"
-#include "oreshnek/http/HttpResponse.h"
+#include "oreshnek/http/HttpResponse.h" // Include this to get FilePath definition
 #include "oreshnek/http/HttpParser.h"
 #include <string>
 #include <vector>
@@ -25,7 +25,8 @@ public:
     size_t read_buffer_fill_ = 0; // Current fill level of the read buffer
 
     // This will now hold either a string response or an active file stream
-    std::variant<std::string, std::unique_ptr<std::ifstream>> write_content_;
+    // Add FilePath to the variant to differentiate the original source
+    std::variant<std::string, std::unique_ptr<std::ifstream>, Http::FilePath> write_content_;
     size_t file_bytes_sent_ = 0; // For file streaming: track bytes sent
     bool headers_sent_ = false; // To ensure headers are sent only once
 

@@ -3,6 +3,7 @@
 #include <sstream>
 #include <ctime>   // For date header
 #include <filesystem> // For file size
+#include <iostream> // For std::cerr
 
 namespace Oreshnek {
 namespace Http {
@@ -24,21 +25,21 @@ HttpResponse& HttpResponse::header(const std::string& name, const std::string& v
 }
 
 HttpResponse& HttpResponse::body(const std::string& content) {
-    body_content_ = content;
+    body_content_ = content; // std::string automatically
     is_file_response_ = false;
     header("Content-Length", std::to_string(std::get<std::string>(body_content_).length()));
     return *this;
 }
 
 HttpResponse& HttpResponse::body(std::string&& content) {
-    body_content_ = std::move(content);
+    body_content_ = std::move(content); // std::string automatically
     is_file_response_ = false;
     header("Content-Length", std::to_string(std::get<std::string>(body_content_).length()));
     return *this;
 }
 
 HttpResponse& HttpResponse::file(const std::string& file_path, const std::string& content_type) {
-    body_content_ = file_path;
+    body_content_ = FilePath(file_path); // Now stores a FilePath object
     is_file_response_ = true;
     header("Content-Type", content_type);
 
@@ -76,7 +77,7 @@ const std::string& HttpResponse::get_body() const {
         // It reads the entire file into a string.
         // This method should primarily be used for non-file responses or small files.
         // For actual file serving, Server/Connection should use the file path directly.
-        const std::string& file_path = std::get<std::string>(body_content_);
+        const std::string& file_path = std::get<FilePath>(body_content_).path; // Access path member
         std::ifstream file(file_path, std::ios::binary);
         if (!file.is_open()) {
             throw std::runtime_error("Failed to open file for get_body(): " + file_path);
@@ -117,7 +118,7 @@ std::string HttpResponse::build_headers_string() const {
 void HttpResponse::reset() {
     status_ = HttpStatus::OK;
     headers_.clear();
-    body_content_ = std::string(); // Reset to empty string
+    body_content_ = std::string(); // Reset to empty string (assigns to the std::string alternative)
     is_file_response_ = false;
     // Re-add default headers
     header("Server", "Oreshnek/1.0.0");

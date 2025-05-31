@@ -13,12 +13,20 @@
 namespace Oreshnek {
 namespace Http {
 
+// Define a distinct type for file paths to avoid std::variant ambiguity
+struct FilePath {
+    std::string path;
+    // Constructor to allow implicit conversion from std::string
+    FilePath(const std::string& p) : path(p) {}
+    FilePath(std::string&& p) : path(std::move(p)) {}
+};
+
 class HttpResponse {
 private:
     HttpStatus status_ = HttpStatus::OK;
     std::unordered_map<std::string, std::string> headers_;
     // Use std::variant to hold either a string body or a file path for streaming
-    std::variant<std::string, std::string> body_content_; // Stores either direct content or file path
+    std::variant<std::string, FilePath> body_content_; // Stores either direct content or file path
     bool is_file_response_ = false; // Flag to indicate if content_ is a file path
 
 public:
@@ -50,7 +58,7 @@ public:
     // New getter to know if it's a file response
     bool is_file() const { return is_file_response_; }
     // Get the variant directly for more efficient handling in Connection/Server
-    const std::variant<std::string, std::string>& get_body_variant() const { return body_content_; }
+    const std::variant<std::string, FilePath>& get_body_variant() const { return body_content_; }
 
 
     // Build the full HTTP response string (excluding large file body)
