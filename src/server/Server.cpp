@@ -81,7 +81,9 @@ bool Server::setup_socket(const std::string& host, int port) {
         return false;
     }
 
-    if (listen(listen_fd_, BACKLOG) < 0) {
+    // THIS IS THE LINE TO FIX
+    // The original code was calling the system's listen function not the class method.
+    if (::listen(listen_fd_, BACKLOG) < 0) { // Use '::' to explicitly call the global listen function
         std::cerr << "Failed to listen on socket: " << strerror(errno) << std::endl;
         close(listen_fd_);
         return false;
@@ -148,27 +150,9 @@ void Server::run() {
                 }
             } else {
                 // Existing client connection
-                // Acquire shared_ptr to connection from map (copy to keep it alive during processing)
-                std::shared_ptr<Net::Connection> conn_ptr; // Use shared_ptr here to avoid connection being deleted while processing
-                {
-                    std::lock_guard<std::mutex> lock(connections_mutex_);
-                    auto it = connections_.find(fd);
-                    if (it != connections_.end()) {
-                        conn_ptr = it->second; // This would imply connections_ map stores shared_ptr
-                                               // We use unique_ptr, so need to be careful with lifetime
-                                               // Better to just pass fd and let the handler access map
-                    }
-                }
-                
                 // If connection was already closed/removed, skip
-                if (!conn_ptr && fd != listen_fd_) {
-                    std::cerr << "Warning: Event for unknown/closed FD " << fd << std::endl;
-                    continue;
-                }
-                
-                // For unique_ptr in map, we need to pass fd and re-lookup or pass raw pointer carefully.
-                // Using a lambda with captured `this` and `fd` will ensure access to the Connection object.
-                // Or, in `handle_client_data`, directly lookup the connection by fd.
+                // The `conn_ptr` block in original code was incorrect due to unique_ptr semantics.
+                // We will directly call handle_client_data and handle_write_ready with fd.
                 
                 // Read events
                 if (event_flags & EPOLLIN) {
@@ -241,7 +225,9 @@ void Server::handle_new_connection() {
         }
 
         epoll_event event;
-        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Edge-triggered, one-shot for client FD
+        // EPOLLONESHOT is crucial for multithreaded servers to prevent thundering herd
+        // and ensure only one thread handles an FD at a time.
+        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; 
         event.data.fd = client_fd;
         if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &event) < 0) {
             std::cerr << "Failed to add client socket to epoll: " << strerror(errno) << std::endl;
@@ -264,13 +250,15 @@ void Server::handle_new_connection() {
 }
 
 void Server::handle_client_data(int fd) {
+    // Acquire unique_ptr to connection from map to process it.
+    // The unique_ptr will be moved back into the map after processing (or deleted on error/close).
     std::unique_ptr<Net::Connection> conn;
     {
         std::lock_guard<std::mutex> lock(connections_mutex_);
         auto it = connections_.find(fd);
         if (it != connections_.end()) {
-            conn = std::move(it->second); // Take ownership to process, put back later
-            connections_.erase(it);
+            conn = std::move(it->second); // Take ownership from map
+            connections_.erase(it); // Remove from map temporarily
         } else {
             std::cerr << "Error: handle_client_data called for non-existent FD " << fd << std::endl;
             return;
@@ -286,9 +274,8 @@ void Server::handle_client_data(int fd) {
     if (bytes_read == 0) {
         // Client closed connection
         std::cerr << "Client on fd " << fd << " closed connection gracefully." << std::endl;
-        conn->close_connection(); // Ensure socket is closed
-        // Connection will be destructed when conn unique_ptr goes out of scope
-        return;
+        conn->close_connection(); 
+        return; // conn unique_ptr will be destructed, removing the connection
     } else if (bytes_read < 0) {
         // Error reading (excluding EAGAIN/EWOULDBLOCK which return 0)
         conn->close_connection();
@@ -298,158 +285,104 @@ void Server::handle_client_data(int fd) {
     // Attempt to parse requests from the connection's read buffer
     while (conn->process_read_buffer()) {
         // Full request parsed! Enqueue it to the thread pool for processing
-        thread_pool_->enqueue([this, captured_conn = std::move(conn)]() mutable {
-            Http::HttpRequest& req = captured_conn->current_request_;
+        // Capture `fd` by value, and `this` (the Server object) by pointer.
+        // We pass the parsed HttpRequest and an empty HttpResponse to the worker.
+        // The worker will populate the HttpResponse and then append to the connection's write buffer.
+        
+        // Create copies of the request data for the thread pool to avoid issues with string_view
+        // pointing to the Connection's internal buffer, which might be reallocated/modified.
+        // This is a trade-off: copying data vs. more complex buffer management.
+        // For a high-performance server, a custom buffer management scheme that allows
+        // zero-copy or minimal copy of string_views would be better.
+        // For now, let's copy relevant HttpRequest data.
+        Http::HttpRequest request_copy = conn->current_request_; // Create a copy of the request
+        int connection_fd_for_lambda = fd; // Capture fd by value
+
+        thread_pool_->enqueue([this, request_copy, connection_fd_for_lambda]() mutable {
             Http::HttpResponse res; // Create a fresh response for this request
 
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;
 
-            // Copy path_params to HttpRequest from Router result
-            if (router_->find_route(req.method(), req.path(), path_params, handler)) {
-                req.path_params_ = std::move(path_params); // Assign found path parameters
+            // `request_copy.path_` is std::string_view, it needs to be processed by Router
+            // If the router modifies path_params, it should do so on a map it owns.
+            // When `find_route` is called, `path_params` will be populated, which is then assigned to `request_copy`.
+            if (router_->find_route(request_copy.method(), request_copy.path(), path_params, handler)) {
+                request_copy.path_params_ = std::move(path_params); // Assign found path parameters
                 try {
-                    handler(req, res); // Execute the route handler
+                    handler(request_copy, res); // Execute the route handler
                 } catch (const std::exception& e) {
-                    std::cerr << "Handler exception for " << http_method_to_string(req.method()) << " " << req.path() << ": " << e.what() << std::endl;
+                    std::cerr << "Handler exception for " << http_method_to_string(request_copy.method()) << " " << request_copy.path() << ": " << e.what() << std::endl;
                     res.status(Http::HttpStatus::INTERNAL_SERVER_ERROR)
                        .json(Json::JsonValue::object()["error"] = Json::JsonValue("Server error"));
                 }
             } else {
-                std::cerr << "No route found for " << http_method_to_string(req.method()) << " " << req.path() << std::endl;
+                std::cerr << "No route found for " << http_method_to_string(request_copy.method()) << " " << request_copy.path() << std::endl;
                 res.status(Http::HttpStatus::NOT_FOUND)
                    .json(Json::JsonValue::object()["error"] = Json::JsonValue("Not Found"));
             }
 
             // After handler, prepare response to be written
-            captured_conn->append_to_write_buffer(res.to_string());
-
-            // Re-arm connection for writing
-            epoll_event event;
-            event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT; // Listen for EPOLLOUT
-            event.data.fd = captured_conn->socket_fd_;
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, captured_conn->socket_fd_, &event) < 0) {
-                std::cerr << "Failed to modify epoll for write on fd " << captured_conn->socket_fd_ << ": " << strerror(errno) << std::endl;
-                captured_conn->close_connection();
-            }
-
-            // After enqueueing the task, put the connection back in the map
-            // This is a critical point: `captured_conn` is now owned by the lambda
-            // If the lambda finishes, it will be destructed.
-            // We need to ensure the connection is put back in the map so it's not lost.
-            // This implies the lambda should be responsible for putting it back,
-            // or we need a different ownership model.
-
-            // Simplest way to "put back" in this model is to return it from the lambda,
-            // or pass a raw pointer/reference and re-insert by the I/O thread.
-            // Given the current design, we need to pass a unique_ptr to the lambda and
-            // return it when done. Let's adjust for that.
-
-            // The 'captured_conn' is std::move'd into the lambda.
-            // When the lambda finishes execution, if it's not put back into the map, it will be deleted.
-            // We need to re-insert the connection.
-            // For now, let's assume the lambda holds ownership until it's ready for next I/O.
-            // But this means the I/O thread can't act on it.
-
-            // REVISED STRATEGY:
-            // 1. I/O thread reads data.
-            // 2. If complete request, it copies/moves Http::HttpRequest data to pass to thread pool.
-            // 3. Connection object remains in `connections_` map.
-            // 4. Thread pool processes request and generates response.
-            // 5. Response data is appended to connection's write buffer.
-            // 6. I/O thread is notified to write (EPOLLOUT).
-            // This avoids passing `std::unique_ptr<Connection>` around.
-
-            // Let's revert to a simpler model: the connection always stays in the map.
-            // And the worker thread just processes data on the request object.
-            // The `handle_client_data` will re-arm the epoll event.
-
-            // *** Revert the `std::move(conn)` and `captured_conn` part of the lambda ***
-            // The connection stays in the map. The worker thread needs to access it,
-            // which means locking the mutex. This is not ideal for performance.
-            // A common pattern is to have a pool of `Connection` objects or
-            // pass just the necessary request data to the thread pool, and then
-            // the I/O thread handles putting the response onto the wire.
-
-            // Let's refine the approach:
-            // The Connection object *must* reside in the main event loop's memory.
-            // When a request is parsed, *only* the HttpRequest object (or its data)
-            // is passed to the thread pool. The response is then built in the thread pool
-            // and communicated back to the main loop (e.g., via a response queue)
-            // or directly appended to the Connection's write buffer (requiring mutex on buffer).
-
-            // Let's re-acquire the connection pointer for the write operations and re-arming epoll.
-            // This means we are back to accessing `connections_` mutex from the thread pool.
-            // This is a point of contention.
-            // Alternative: The worker thread computes the response *string* and queues it back
-            // to a per-connection output queue, which the I/O thread picks up.
-
-            // For now, to minimize changes and ensure a runnable example,
-            // the worker thread will directly append to the connection's buffer (under mutex).
-            // This is not the ultimate high-performance pattern for a fully decoupled system,
-            // but is common for simplicity.
-
-            // The `captured_conn` unique_ptr should not be moved. Instead,
-            // we should pass a raw pointer `conn_ptr` or `fd` and re-lookup.
-
-            // So the `enqueue` should look like this (simplified for the connection management logic):
-            // After handler(req, res);
-            // Get connection back via fd
-            std::unique_ptr<Net::Connection> current_connection;
+            // Re-acquire the connection from the map to append data and re-arm epoll
+            std::unique_ptr<Net::Connection> current_connection_in_thread;
             {
                 std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
-                auto iter = this->connections_.find(fd); // `fd` is captured from `handle_client_data`
+                auto iter = this->connections_.find(connection_fd_for_lambda);
                 if (iter != this->connections_.end()) {
-                    current_connection = std::move(iter->second);
-                    this->connections_.erase(iter);
+                    current_connection_in_thread = std::move(iter->second);
+                    this->connections_.erase(iter); // Temporarily remove to work on it
                 }
             }
 
-            if (current_connection) {
-                current_connection->append_to_write_buffer(res.to_string());
-                current_connection->current_request_.path_params_.clear(); // Clear path params for next request
-                current_connection->http_parser_.reset(); // Reset parser for next request on same connection
+            if (current_connection_in_thread) {
+                current_connection_in_thread->append_to_write_buffer(res.to_string());
+                current_connection_in_thread->current_request_.path_params_.clear(); // Clear path params for next request
+                current_connection_in_thread->http_parser_.reset(); // Reset parser for next request on same connection
 
                 // Re-arm connection for writing and subsequent reads
                 epoll_event event;
-                // Add EPOLLOUT if there's data to send
-                // Add EPOLLIN if we expect more requests on keep-alive
-                event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Always expect read
-                if (!current_connection->write_buffer_.empty()) {
+                event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Always expect read for keep-alive
+                if (!current_connection_in_thread->write_buffer_.empty()) {
                     event.events |= EPOLLOUT; // Only ask for write event if buffer isn't empty
                 }
-                event.data.fd = current_connection->socket_fd_;
+                event.data.fd = connection_fd_for_lambda;
 
+                // Put connection back into the map before re-arming epoll
                 {
                     std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
-                    this->connections_[current_connection->socket_fd_] = std::move(current_connection);
+                    this->connections_[connection_fd_for_lambda] = std::move(current_connection_in_thread);
                 }
 
-                if (epoll_ctl(this->epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                    std::cerr << "Failed to modify epoll for fd " << fd << ": " << strerror(errno) << std::endl;
-                    this->close_connection(fd);
+                if (epoll_ctl(this->epoll_fd_, EPOLL_CTL_MOD, connection_fd_for_lambda, &event) < 0) {
+                    std::cerr << "Failed to modify epoll for fd " << connection_fd_for_lambda << ": " << strerror(errno) << std::endl;
+                    this->close_connection(connection_fd_for_lambda);
                 }
             } else {
-                std::cerr << "Error: Connection " << fd << " not found in map after processing by thread pool." << std::endl;
+                std::cerr << "Error: Connection " << connection_fd_for_lambda << " not found in map after processing by thread pool." << std::endl;
             }
         }); // End of enqueue lambda
+    } 
 
-        // After processing the request, reset the connection for the next one if it's keep-alive
-        // This 'reset' was problematic. It should be done *after* the response is sent.
-        // It's better to reset the parser within the `Connection` object,
-        // and only after the response is completely sent.
-        // For now, the `Connection::reset()` will be called by the worker thread.
-    } // End of while (conn->process_read_buffer())
+    // If a complete request was NOT parsed, or if parsing is ongoing/needs more data,
+    // the connection object 'conn' still holds unprocessed data in its read buffer.
+    // It must be put back into the connections_ map and re-armed for EPOLLIN.
+    // This happens outside the while loop, *after* attempting to process all requests.
 
-    // If request is not complete (more data needed) or parsing error, put connection back
+    // If 'conn' is still valid here (wasn't closed due to read error or graceful close),
+    // put it back and re-arm epoll for read events.
     {
         std::lock_guard<std::mutex> lock(connections_mutex_);
         if (conn) { // conn might be null if it was closed
              connections_[fd] = std::move(conn);
-             // Re-arm epoll for EPOLLIN only (if not EPOLLOUT needed)
+             // Re-arm epoll for EPOLLIN only (if no EPOLLOUT is pending yet from previous handling)
              epoll_event event;
              event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
              event.data.fd = fd;
+             // If there's already data in write_buffer_ for some reason, also ask for EPOLLOUT
+             if (!connections_[fd]->write_buffer_.empty()) {
+                 event.events |= EPOLLOUT;
+             }
+
              if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
                  std::cerr << "Failed to modify epoll for read on fd " << fd << " after partial read: " << strerror(errno) << std::endl;
                  close_connection(fd);
