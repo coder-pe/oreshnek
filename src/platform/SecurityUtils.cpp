@@ -100,7 +100,7 @@ std::string SecurityUtils::base64_encode(const std::string& input) {
 
 // You will need a base64_decode for decodeJWT. Here's a basic one:
 // This function needs to be defined in the Oreshnek::Platform namespace
-std::string base64_decode(const std::string& input) {
+std::string base64_decode(const std::string& input) { // Now correctly part of Oreshnek::Platform
     // This is a simplified base64_decode. For production, use a more robust library.
     // This implementation is a placeholder and may not handle all edge cases or padding correctly.
     const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
@@ -110,11 +110,11 @@ std::string base64_decode(const std::string& input) {
 
     int val = 0, valb = -8;
     for (char c : input) {
-        if (T[c] == -1) break;
+        if (T[c] == -1) break; // Add check for invalid characters
         val = (val << 6) + T[c];
         valb += 6;
         if (valb >= 0) {
-            decoded.push_back(char((val >> valb) & 0xFF));
+            decoded.push_back(static_cast<char>((val >> valb) & 0xFF));
             valb -= 8;
         }
     }
