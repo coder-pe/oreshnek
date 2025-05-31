@@ -207,7 +207,7 @@ int main() {
 
         // Serve home page [cite: 200]
         server.get("/", [](const Oreshnek::HttpRequest& /*req*/, Oreshnek::HttpResponse& res) {
-            std::string html_content = R"(<!DOCTYPE html>
+            std::string html_content = R"ORES_HTML_DELIM(<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -366,7 +366,7 @@ int main() {
 
     <script src="/static/script.js"></script>
 </body>
-</html>)";
+</html>)ORES_HTML_DELIM";
             res.status(Oreshnek::Http::HttpStatus::OK).html(html_content);
         });
 
@@ -648,7 +648,7 @@ int main() {
             // Fetch video details to populate the player page
             // (You'll need a get_video_by_id in DatabaseManager)
             // For now, let's just use the ID in the HTML
-            std::string video_player_html = R"(<!DOCTYPE html>
+            std::string video_player_html = R"ORES_HTML_DELIM(<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -735,7 +735,7 @@ int main() {
         }
     </script>
 </body>
-</html>)";
+</html>)ORES_HTML_DELIM";
             res.status(Oreshnek::Http::HttpStatus::OK).html(video_player_html);
         });
 

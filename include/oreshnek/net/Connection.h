@@ -50,7 +50,7 @@ public:
     ssize_t write_data();
     
     // Set the content to be written (either a string or a file path)
-    void set_response_content(const HttpResponse& response);
+    void set_response_content(const Http::HttpResponse& response); // Add Http:: prefix
 
     // Process the read buffer to parse an HTTP request.
     // Returns true if a complete request is parsed and available in current_request_.

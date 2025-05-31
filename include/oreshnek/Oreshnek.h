@@ -5,14 +5,13 @@
 // Core components
 #include "oreshnek/http/HttpEnums.h"
 #include "oreshnek/http/HttpRequest.h"
-#include "oreshnek/http/HttpResponse.h"
+#include "oreshnek/http/HttpResponse.h" // This line is crucial for HttpResponse to be known
 #include "oreshnek/http/HttpParser.h"
 
 #include "oreshnek/json/JsonValue.h"
 #include "oreshnek/json/JsonParser.h"
 
-#include "oreshnek/net/Connection.h"
-
+#include "oreshnek/net/Connection.h" // This includes Connection.h AFTER HttpResponse.h
 #include "oreshnek/server/Router.h"
 #include "oreshnek/server/Server.h"
 #include "oreshnek/server/ThreadPool.h"
