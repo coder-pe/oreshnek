@@ -20,7 +20,6 @@
 // Define the top-level namespace alias for convenience
 namespace Oreshnek {
     // Aliases to make usage simpler, mimicking original MiniRest structure
-    using Server = Server::Server;
     using HttpRequest = Http::HttpRequest;
     using HttpResponse = Http::HttpResponse;
     using JsonValue = Json::JsonValue;

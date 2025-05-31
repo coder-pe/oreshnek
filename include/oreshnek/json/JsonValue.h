@@ -32,6 +32,10 @@ private:
     void copy_from(const JsonValue& other);
     void move_from(JsonValue&& other);
 
+    // Private helper methods for type conversion/initialization
+    void make_array();
+    void make_object();
+
 public:
     // Constructors
     JsonValue() : type_(JsonType::NULL_VALUE) {}
@@ -141,6 +145,8 @@ public:
 
     // Friend declaration for output stream operator
     friend std::ostream& operator<<(std::ostream& os, const JsonValue& val);
+    friend void serialize_to_string_recursive(std::ostream& os, const JsonValue& val, int indent_level, int indent_width);
+
 };
 
 // Helper for parsing JSON (declaration) - actual implementation in JsonParser.cpp

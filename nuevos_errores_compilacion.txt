@@ -1,0 +1,54 @@
+tecnodromo@penguin:~/lab/cpp/oreshnek/build$ make
+[  6%] Building CXX object CMakeFiles/oreshnek_server.dir/src/http/HttpParser.cpp.o
+[ 12%] Building CXX object CMakeFiles/oreshnek_server.dir/src/http/HttpRequest.cpp.o
+[ 18%] Building CXX object CMakeFiles/oreshnek_server.dir/src/http/HttpResponse.cpp.o
+[ 25%] Building CXX object CMakeFiles/oreshnek_server.dir/src/json/JsonParser.cpp.o
+[ 31%] Building CXX object CMakeFiles/oreshnek_server.dir/src/json/JsonValue.cpp.o
+[ 37%] Building CXX object CMakeFiles/oreshnek_server.dir/src/main.cpp.o
+In file included from /home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:2:
+/home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/Oreshnek.h:23:34: error: ‘using Server = class Oreshnek::Server::Server’ redeclared as different kind of entity
+   23 |     using Server = Server::Server;
+      |                                  ^
+In file included from /home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/Oreshnek.h:16:
+/home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/server/Router.h:16:11: note: previous declaration ‘namespace Oreshnek::Server { }’
+   16 | namespace Server {
+      |           ^~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:8:11: error: ‘Server’ in namespace ‘Oreshnek’ does not name a type
+    8 | Oreshnek::Server* g_server = nullptr;
+      |           ^~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/server/Router.h:16:11: note: ‘Oreshnek::Server’ declared here
+   16 | namespace Server {
+      |           ^~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp: In function ‘void Oreshnek::signal_handler(int)’:
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:11:9: error: ‘g_server’ was not declared in this scope
+   11 |     if (g_server) {
+      |         ^~~~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp: In function ‘int Oreshnek::main()’:
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:21:26: error: expected primary-expression before ‘server’
+   21 |         Oreshnek::Server server(std::thread::hardware_concurrency());
+      |                          ^~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:22:9: error: ‘g_server’ was not declared in this scope
+   22 |         g_server = &server; // Set global pointer for signal handling
+      |         ^~~~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:22:21: error: ‘server’ was not declared in this scope
+   22 |         g_server = &server; // Set global pointer for signal handling
+      |                     ^~~~~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp: In lambda function:
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:31:66: warning: unused parameter ‘req’ [-Wunused-parameter]
+   31 |         server.get("/api/hello", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp: In lambda function:
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:95:67: warning: unused parameter ‘req’ [-Wunused-parameter]
+   95 |         server.get("/api/health", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+      |                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp: In lambda function:
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:110:66: warning: unused parameter ‘req’ [-Wunused-parameter]
+  110 |         server.get("/api/stats", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+      |                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp: In lambda function:
+/home/tecnodromo/lab/cpp/oreshnek/src/main.cpp:121:69: warning: unused parameter ‘req’ [-Wunused-parameter]
+  121 |         server.get("/api/redirect", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+      |                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+make[2]: *** [CMakeFiles/oreshnek_server.dir/build.make:146: CMakeFiles/oreshnek_server.dir/src/main.cpp.o] Error 1
+make[1]: *** [CMakeFiles/Makefile2:83: CMakeFiles/oreshnek_server.dir/all] Error 2
+make: *** [Makefile:91: all] Error 2

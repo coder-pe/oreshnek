@@ -5,7 +5,7 @@
 #include <ctime> // For std::time
 
 // Global server instance for signal handling
-Oreshnek::Server* g_server = nullptr;
+Oreshnek::Server::Server* g_server = nullptr;
 
 void signal_handler(int signal) {
     if (g_server) {
@@ -18,7 +18,7 @@ int main() {
     try {
         // Create server instance with a specific number of worker threads
         // Using std::thread::hardware_concurrency() is a good default.
-        Oreshnek::Server server(std::thread::hardware_concurrency());
+        Oreshnek::Server::Server server(std::thread::hardware_concurrency());
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers
@@ -28,7 +28,7 @@ int main() {
         // Define API routes
 
         // GET /api/hello - Simple hello world
-        server.get("/api/hello", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+        server.get("/api/hello", [](const Oreshnek::HttpRequest& /*req*/, Oreshnek::HttpResponse& res) {
             Oreshnek::JsonValue response = Oreshnek::JsonValue::object();
             response["message"] = Oreshnek::JsonValue("Hello, World!");
             response["timestamp"] = Oreshnek::JsonValue(static_cast<double>(std::time(nullptr))); // Use double for JsonValue number
@@ -92,7 +92,7 @@ int main() {
         });
 
         // GET /api/health - Health check endpoint
-        server.get("/api/health", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+        server.get("/api/health", [](const Oreshnek::HttpRequest& /*req*/, Oreshnek::HttpResponse& res) {
             Oreshnek::JsonValue health = Oreshnek::JsonValue::object();
             health["status"] = Oreshnek::JsonValue("healthy");
             health["uptime"] = Oreshnek::JsonValue(static_cast<double>(std::time(nullptr)));
@@ -107,7 +107,7 @@ int main() {
         });
 
         // GET /api/stats - Server statistics
-        server.get("/api/stats", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+        server.get("/api/stats", [](const Oreshnek::HttpRequest& /*req*/, Oreshnek::HttpResponse& res) {
             Oreshnek::JsonValue stats = Oreshnek::JsonValue::object();
             stats["requests_handled"] = Oreshnek::JsonValue(42.0); // Example values
             stats["active_connections"] = Oreshnek::JsonValue(5.0);
@@ -118,7 +118,7 @@ int main() {
         });
         
         // GET /api/redirect - Example redirect
-        server.get("/api/redirect", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
+        server.get("/api/redirect", [](const Oreshnek::HttpRequest& /*req*/, Oreshnek::HttpResponse& res) {
             res.status(Oreshnek::Http::HttpStatus::OK) // Or 302 for temporary redirect
                .header("Location", "/api/hello")
                .text("Redirecting to /api/hello");

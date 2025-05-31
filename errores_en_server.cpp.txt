@@ -1,0 +1,104 @@
+[  6%] Building CXX object CMakeFiles/oreshnek_server.dir/src/server/Server.cpp.o
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp: In member function ‘bool Oreshnek::Server::Server::setup_socket(const std::string&, int)’:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:84:53: warning: comparison of constant ‘0’ with boolean expression is always false [-Wbool-compare]
+   84 |     if (listen(std::to_string(listen_fd_), BACKLOG) < 0) {
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp: In member function ‘void Oreshnek::Server::Server::run()’:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:157:40: error: no match for ‘operator=’ (operand types are ‘std::shared_ptr<Oreshnek::Net::Connection>’ and ‘std::unique_ptr<Oreshnek::Net::Connection>’)
+  157 |                         conn_ptr = it->second; // This would imply connections_ map stores shared_ptr
+      |                                        ^~~~~~
+In file included from /usr/include/c++/12/memory:77,
+                 from /home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/json/JsonValue.h:8,
+                 from /home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/http/HttpRequest.h:6,
+                 from /home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/server/Router.h:5,
+                 from /home/tecnodromo/lab/cpp/oreshnek/include/oreshnek/server/Server.h:5,
+                 from /home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:2:
+/usr/include/c++/12/bits/shared_ptr.h:418:9: note: candidate: ‘template<class _Yp> std::shared_ptr<_Tp>::_Assignable<const std::shared_ptr<_Yp>&> std::shared_ptr<_Tp>::operator=(const std::shared_ptr<_Yp>&) [with _Tp = Oreshnek::Net::Connection]’
+  418 |         operator=(const shared_ptr<_Yp>& __r) noexcept
+      |         ^~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:418:9: note:   template argument deduction/substitution failed:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:157:40: note:   ‘std::unique_ptr<Oreshnek::Net::Connection>’ is not derived from ‘const std::shared_ptr<_Tp>’
+  157 |                         conn_ptr = it->second; // This would imply connections_ map stores shared_ptr
+      |                                        ^~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:429:9: note: candidate: ‘template<class _Yp> std::shared_ptr<_Tp>::_Assignable<std::auto_ptr<_Up> > std::shared_ptr<_Tp>::operator=(std::auto_ptr<_Up>&&) [with _Tp = Oreshnek::Net::Connection]’
+  429 |         operator=(auto_ptr<_Yp>&& __r)
+      |         ^~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:429:9: note:   template argument deduction/substitution failed:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:157:40: note:   ‘std::unique_ptr<Oreshnek::Net::Connection>’ is not derived from ‘std::auto_ptr<_Up>’
+  157 |                         conn_ptr = it->second; // This would imply connections_ map stores shared_ptr
+      |                                        ^~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:446:9: note: candidate: ‘template<class _Yp> std::shared_ptr<_Tp>::_Assignable<std::shared_ptr<_Yp> > std::shared_ptr<_Tp>::operator=(std::shared_ptr<_Yp>&&) [with _Tp = Oreshnek::Net::Connection]’
+  446 |         operator=(shared_ptr<_Yp>&& __r) noexcept
+      |         ^~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:446:9: note:   template argument deduction/substitution failed:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:157:40: note:   ‘std::unique_ptr<Oreshnek::Net::Connection>’ is not derived from ‘std::shared_ptr<_Tp>’
+  157 |                         conn_ptr = it->second; // This would imply connections_ map stores shared_ptr
+      |                                        ^~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:454:9: note: candidate: ‘std::shared_ptr<_Tp>::_Assignable<std::unique_ptr<_Up, _Ep> > std::shared_ptr<_Tp>::operator=(std::unique_ptr<_Up, _Ep>&&) [with _Yp = Oreshnek::Net::Connection; _Del = std::default_delete<Oreshnek::Net::Connection>; _Tp = Oreshnek::Net::Connection; _Assignable<std::unique_ptr<_Up, _Ep> > = std::shared_ptr<Oreshnek::Net::Connection>&]’ (near match)
+  454 |         operator=(unique_ptr<_Yp, _Del>&& __r)
+      |         ^~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:454:9: note:   conversion of argument 1 would be ill-formed:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:157:40: error: cannot bind rvalue reference of type ‘std::unique_ptr<Oreshnek::Net::Connection>&&’ to lvalue of type ‘std::unique_ptr<Oreshnek::Net::Connection>’
+  157 |                         conn_ptr = it->second; // This would imply connections_ map stores shared_ptr
+      |                                    ~~~~^~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:414:19: note: candidate: ‘std::shared_ptr<_Tp>& std::shared_ptr<_Tp>::operator=(const std::shared_ptr<_Tp>&) [with _Tp = Oreshnek::Net::Connection]’
+  414 |       shared_ptr& operator=(const shared_ptr&) noexcept = default;
+      |                   ^~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:414:29: note:   no known conversion for argument 1 from ‘std::unique_ptr<Oreshnek::Net::Connection>’ to ‘const std::shared_ptr<Oreshnek::Net::Connection>&’
+  414 |       shared_ptr& operator=(const shared_ptr&) noexcept = default;
+      |                             ^~~~~~~~~~~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:438:7: note: candidate: ‘std::shared_ptr<_Tp>& std::shared_ptr<_Tp>::operator=(std::shared_ptr<_Tp>&&) [with _Tp = Oreshnek::Net::Connection]’
+  438 |       operator=(shared_ptr&& __r) noexcept
+      |       ^~~~~~~~
+/usr/include/c++/12/bits/shared_ptr.h:438:30: note:   no known conversion for argument 1 from ‘std::unique_ptr<Oreshnek::Net::Connection>’ to ‘std::shared_ptr<Oreshnek::Net::Connection>&&’
+  438 |       operator=(shared_ptr&& __r) noexcept
+      |                 ~~~~~~~~~~~~~^~~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp: In lambda function:
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:401:53: error: ‘fd’ is not captured
+  401 |                 auto iter = this->connections_.find(fd); // `fd` is captured from `handle_client_data`
+      |                                                     ^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:301:69: note: the lambda has no capture-default
+  301 |         thread_pool_->enqueue([this, captured_conn = std::move(conn)]() mutable {
+      |                                                                     ^
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:266:37: note: ‘int fd’ declared here
+  266 | void Server::handle_client_data(int fd) {
+      |                                 ~~~~^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:428:63: error: ‘fd’ is not captured
+  428 |                 if (epoll_ctl(this->epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+      |                                                               ^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:301:69: note: the lambda has no capture-default
+  301 |         thread_pool_->enqueue([this, captured_conn = std::move(conn)]() mutable {
+      |                                                                     ^
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:266:37: note: ‘int fd’ declared here
+  266 | void Server::handle_client_data(int fd) {
+      |                                 ~~~~^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:429:70: error: ‘fd’ is not captured
+  429 |                     std::cerr << "Failed to modify epoll for fd " << fd << ": " << strerror(errno) << std::endl;
+      |                                                                      ^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:301:69: note: the lambda has no capture-default
+  301 |         thread_pool_->enqueue([this, captured_conn = std::move(conn)]() mutable {
+      |                                                                     ^
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:266:37: note: ‘int fd’ declared here
+  266 | void Server::handle_client_data(int fd) {
+      |                                 ~~~~^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:430:44: error: ‘fd’ is not captured
+  430 |                     this->close_connection(fd);
+      |                                            ^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:301:69: note: the lambda has no capture-default
+  301 |         thread_pool_->enqueue([this, captured_conn = std::move(conn)]() mutable {
+      |                                                                     ^
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:266:37: note: ‘int fd’ declared here
+  266 | void Server::handle_client_data(int fd) {
+      |                                 ~~~~^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:433:54: error: ‘fd’ is not captured
+  433 |                 std::cerr << "Error: Connection " << fd << " not found in map after processing by thread pool." << std::endl;
+      |                                                      ^~
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:301:69: note: the lambda has no capture-default
+  301 |         thread_pool_->enqueue([this, captured_conn = std::move(conn)]() mutable {
+      |                                                                     ^
+/home/tecnodromo/lab/cpp/oreshnek/src/server/Server.cpp:266:37: note: ‘int fd’ declared here
+  266 | void Server::handle_client_data(int fd) {
+      |                                 ~~~~^~
+make[2]: *** [CMakeFiles/oreshnek_server.dir/build.make:216: CMakeFiles/oreshnek_server.dir/src/server/Server.cpp.o] Error 1
+make[1]: *** [CMakeFiles/Makefile2:83: CMakeFiles/oreshnek_server.dir/all] Error 2
+make: *** [Makefile:91: all] Error 2

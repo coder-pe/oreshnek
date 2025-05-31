@@ -3,6 +3,7 @@
 #include <algorithm> // For std::fill
 #include <iomanip>   // For std::quoted
 #include <cassert>
+#include <sstream> // Required for std::ostringstream
 
 namespace Oreshnek {
 namespace Json {
@@ -72,6 +73,20 @@ void JsonValue::move_from(JsonValue&& other) {
     }
     other.type_ = JsonType::NULL_VALUE; // Mark other as moved-from
     other.str_val = nullptr; // Clear pointers in moved-from object
+    other.arr_val = nullptr;
+    other.obj_val = nullptr;
+}
+
+void JsonValue::make_array() {
+    cleanup(); // Clean up current state if any
+    type_ = JsonType::ARRAY;
+    arr_val = new std::vector<JsonValue>();
+}
+
+void JsonValue::make_object() {
+    cleanup(); // Clean up current state if any
+    type_ = JsonType::OBJECT;
+    obj_val = new std::unordered_map<std::string, JsonValue>();
 }
 
 
@@ -125,15 +140,13 @@ const JsonValue& JsonValue::operator[](const std::string& key) const {
 
 JsonValue JsonValue::array() {
     JsonValue val;
-    val.type_ = JsonType::ARRAY;
-    val.arr_val = new std::vector<JsonValue>();
+    val.make_array(); // Use the new make_array helper
     return val;
 }
 
 JsonValue JsonValue::object() {
     JsonValue val;
-    val.type_ = JsonType::OBJECT;
-    val.obj_val = new std::unordered_map<std::string, JsonValue>();
+    val.make_object(); // Use the new make_object helper
     return val;
 }
 
@@ -160,26 +173,22 @@ void serialize_to_string_recursive(std::ostream& os, const JsonValue& val, int i
     std::string indent_str(indent_level * indent_width, ' ');
     std::string next_indent_str((indent_level + 1) * indent_width, ' ');
 
-    switch (val.type_) {
-        case JsonType::NULL_VALUE:
-            os << "null";
-            break;
-        case JsonType::BOOL:
-            os << (val.bool_val ? "true" : "false");
-            break;
-        case JsonType::NUMBER:
-            os << val.num_val;
-            break;
-        case JsonType::STRING:
-            // Use std::quoted for proper JSON string escaping
-            os << std::quoted(val.get_string());
-            break;
-        case JsonType::ARRAY:
-            os << "[";
-            if (val.get_array().empty()) {
-                os << "]";
-                break;
-            }
+    if (val.is_null()) {
+        os << "null";
+    } else if (val.is_bool()) {
+        os << (val.get_bool() ? "true" : "false");
+    } else if (val.is_number()) {
+        os << val.get_number();
+    } else if (val.is_string()) {
+        // Use std::quoted for proper JSON string escaping
+        os << std::quoted(val.get_string());
+    } else if (val.is_array()) {
+        os << "[";
+        if (val.get_array().empty()) {
+            os << "]";
+            // No break here, continue to add newline/indent if indent_width > 0 even for empty array
+            // This is to maintain consistent formatting for empty array vs non-empty array
+        } else {
             if (indent_width > 0) os << "\n";
             for (size_t i = 0; i < val.get_array().size(); ++i) {
                 if (indent_width > 0) os << next_indent_str;
@@ -190,14 +199,14 @@ void serialize_to_string_recursive(std::ostream& os, const JsonValue& val, int i
                 if (indent_width > 0) os << "\n";
             }
             if (indent_width > 0) os << indent_str;
-            os << "]";
-            break;
-        case JsonType::OBJECT:
-            os << "{";
-            if (val.get_object().empty()) {
-                os << "}";
-                break;
-            }
+        }
+        os << "]";
+    } else if (val.is_object()) {
+        os << "{";
+        if (val.get_object().empty()) {
+            os << "}";
+            // No break here, continue to add newline/indent if indent_width > 0 even for empty object
+        } else {
             if (indent_width > 0) os << "\n";
             bool first = true;
             for (const auto& pair : val.get_object()) {
@@ -211,8 +220,8 @@ void serialize_to_string_recursive(std::ostream& os, const JsonValue& val, int i
                 first = false;
             }
             if (indent_width > 0) os << "\n" << indent_str;
-            os << "}";
-            break;
+        }
+        os << "}";
     }
 }
 

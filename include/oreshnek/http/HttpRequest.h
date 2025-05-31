@@ -32,7 +32,6 @@ public:
     std::string_view body_;
 
     // Constructor is private; requests are built by HttpParser
-private:
     HttpRequest() = default; // Only HttpParser should create these
     friend class HttpParser; // HttpParser can access private members
 

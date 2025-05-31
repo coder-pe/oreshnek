@@ -1,0 +1,3 @@
+/home/tecnodromo/lab/cpp/oreshnek/build/CMakeFiles/oreshnek_server.dir
+/home/tecnodromo/lab/cpp/oreshnek/build/CMakeFiles/edit_cache.dir
+/home/tecnodromo/lab/cpp/oreshnek/build/CMakeFiles/rebuild_cache.dir
