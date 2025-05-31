@@ -9,6 +9,12 @@
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
 
+// For sendfile (Linux specific)
+#ifdef __linux__
+#include <sys/sendfile.h>
+#endif
+#include <sys/stat.h> // For stat (to get file size and check existence)
+
 namespace Oreshnek {
 namespace Server {
 
@@ -81,8 +87,6 @@ bool Server::setup_socket(const std::string& host, int port) {
         return false;
     }
 
-    // THIS IS THE LINE TO FIX
-    // The original code was calling the system's listen function not the class method.
     if (::listen(listen_fd_, BACKLOG) < 0) { // Use '::' to explicitly call the global listen function
         std::cerr << "Failed to listen on socket: " << strerror(errno) << std::endl;
         close(listen_fd_);
@@ -150,10 +154,6 @@ void Server::run() {
                 }
             } else {
                 // Existing client connection
-                // If connection was already closed/removed, skip
-                // The `conn_ptr` block in original code was incorrect due to unique_ptr semantics.
-                // We will directly call handle_client_data and handle_write_ready with fd.
-                
                 // Read events
                 if (event_flags & EPOLLIN) {
                     handle_client_data(fd);
@@ -225,8 +225,6 @@ void Server::handle_new_connection() {
         }
 
         epoll_event event;
-        // EPOLLONESHOT is crucial for multithreaded servers to prevent thundering herd
-        // and ensure only one thread handles an FD at a time.
         event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; 
         event.data.fd = client_fd;
         if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &event) < 0) {
@@ -251,7 +249,6 @@ void Server::handle_new_connection() {
 
 void Server::handle_client_data(int fd) {
     // Acquire unique_ptr to connection from map to process it.
-    // The unique_ptr will be moved back into the map after processing (or deleted on error/close).
     std::unique_ptr<Net::Connection> conn;
     {
         std::lock_guard<std::mutex> lock(connections_mutex_);
@@ -285,16 +282,6 @@ void Server::handle_client_data(int fd) {
     // Attempt to parse requests from the connection's read buffer
     while (conn->process_read_buffer()) {
         // Full request parsed! Enqueue it to the thread pool for processing
-        // Capture `fd` by value, and `this` (the Server object) by pointer.
-        // We pass the parsed HttpRequest and an empty HttpResponse to the worker.
-        // The worker will populate the HttpResponse and then append to the connection's write buffer.
-        
-        // Create copies of the request data for the thread pool to avoid issues with string_view
-        // pointing to the Connection's internal buffer, which might be reallocated/modified.
-        // This is a trade-off: copying data vs. more complex buffer management.
-        // For a high-performance server, a custom buffer management scheme that allows
-        // zero-copy or minimal copy of string_views would be better.
-        // For now, let's copy relevant HttpRequest data.
         Http::HttpRequest request_copy = conn->current_request_; // Create a copy of the request
         int connection_fd_for_lambda = fd; // Capture fd by value
 
@@ -304,49 +291,46 @@ void Server::handle_client_data(int fd) {
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;
 
-            // `request_copy.path_` is std::string_view, it needs to be processed by Router
-            // If the router modifies path_params, it should do so on a map it owns.
-            // When `find_route` is called, `path_params` will be populated, which is then assigned to `request_copy`.
             if (router_->find_route(request_copy.method(), request_copy.path(), path_params, handler)) {
                 request_copy.path_params_ = std::move(path_params); // Assign found path parameters
                 try {
                     handler(request_copy, res); // Execute the route handler
                 } catch (const std::exception& e) {
-                    std::cerr << "Handler exception for " << http_method_to_string(request_copy.method()) << " " << request_copy.path() << ": " << e.what() << std::endl;
+                    std::cerr << "Handler exception for " << Http::http_method_to_string(request_copy.method()) << " " << request_copy.path() << ": " << e.what() << std::endl;
                     res.status(Http::HttpStatus::INTERNAL_SERVER_ERROR)
                        .json(Json::JsonValue::object()["error"] = Json::JsonValue("Server error"));
                 }
             } else {
-                std::cerr << "No route found for " << http_method_to_string(request_copy.method()) << " " << request_copy.path() << std::endl;
+                std::cerr << "No route found for " << Http::http_method_to_string(request_copy.method()) << " " << request_copy.path() << std::endl;
                 res.status(Http::HttpStatus::NOT_FOUND)
                    .json(Json::JsonValue::object()["error"] = Json::JsonValue("Not Found"));
             }
 
             // After handler, prepare response to be written
-            // Re-acquire the connection from the map to append data and re-arm epoll
             std::unique_ptr<Net::Connection> current_connection_in_thread;
             {
                 std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
                 auto iter = this->connections_.find(connection_fd_for_lambda);
                 if (iter != this->connections_.end()) {
                     current_connection_in_thread = std::move(iter->second);
-                    this->connections_.erase(iter); // Temporarily remove to work on it
+                    this->connections_.erase(iter);
                 }
             }
 
             if (current_connection_in_thread) {
-                current_connection_in_thread->append_to_write_buffer(res.to_string());
-                current_connection_in_thread->current_request_.path_params_.clear(); // Clear path params for next request
+                // Set the response content on the connection
+                current_connection_in_thread->set_response_content(res);
+
+                current_connection_in_thread->current_request_ = Http::HttpRequest(); // Clear request for next one
                 current_connection_in_thread->http_parser_.reset(); // Reset parser for next request on same connection
 
                 // Re-arm connection for writing and subsequent reads
                 epoll_event event;
-                event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Always expect read for keep-alive
-                if (!current_connection_in_thread->write_buffer_.empty()) {
-                    event.events |= EPOLLOUT; // Only ask for write event if buffer isn't empty
-                }
+                // Always ask for EPOLLOUT if there's data to write.
+                // EPOLLIN will be re-added by handle_write_ready after all writes are done for this response.
+                event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
                 event.data.fd = connection_fd_for_lambda;
-
+                
                 // Put connection back into the map before re-arming epoll
                 {
                     std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
@@ -363,11 +347,6 @@ void Server::handle_client_data(int fd) {
         }); // End of enqueue lambda
     } 
 
-    // If a complete request was NOT parsed, or if parsing is ongoing/needs more data,
-    // the connection object 'conn' still holds unprocessed data in its read buffer.
-    // It must be put back into the connections_ map and re-armed for EPOLLIN.
-    // This happens outside the while loop, *after* attempting to process all requests.
-
     // If 'conn' is still valid here (wasn't closed due to read error or graceful close),
     // put it back and re-arm epoll for read events.
     {
@@ -379,7 +358,7 @@ void Server::handle_client_data(int fd) {
              event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
              event.data.fd = fd;
              // If there's already data in write_buffer_ for some reason, also ask for EPOLLOUT
-             if (!connections_[fd]->write_buffer_.empty()) {
+             if (connections_[fd]->has_data_to_write()) { // Use the new check
                  event.events |= EPOLLOUT;
              }
 
@@ -411,49 +390,47 @@ void Server::handle_write_ready(int fd) {
         return;
     }
 
+    // Attempt to write data
     ssize_t bytes_written = conn->write_data();
+
     if (bytes_written < 0) {
         conn->close_connection();
         return;
     }
 
-    if (conn->write_buffer_.empty()) {
+    // Check if all data for the current response has been sent
+    if (!conn->has_data_to_write()) {
         // All data sent. Re-arm for reading or close if not keep-alive.
-        epoll_event event;
-        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Read more data if keep-alive
-        event.data.fd = fd;
-
-        // Check for keep-alive header in the *processed* request
-        // (This would require HttpRequest to be part of Connection state and accessible)
-        // For simplicity, let's assume keep-alive by default unless explicitly set to close.
-        if (conn->keep_alive_) { // `keep_alive_` is a member of `Connection`
-            // Re-arm for reading if keep-alive
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                std::cerr << "Failed to modify epoll for read on fd " << fd << ": " << strerror(errno) << std::endl;
-                conn->close_connection();
-            }
+        if (conn->keep_alive_) { 
+            epoll_event event;
+            event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Read more data for next request
+            event.data.fd = fd;
             conn->reset(); // Reset the connection for the next request
+
             {
                 std::lock_guard<std::mutex> lock(connections_mutex_);
                 connections_[fd] = std::move(conn);
             }
+            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+                std::cerr << "Failed to modify epoll for read on fd " << fd << ": " << strerror(errno) << std::endl;
+                close_connection(fd);
+            }
         } else {
             // Not keep-alive, close connection
             conn->close_connection();
-            // Connection will be removed from map when unique_ptr goes out of scope.
         }
     } else {
         // Still data to send, re-arm for EPOLLOUT
         epoll_event event;
         event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
         event.data.fd = fd;
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-            std::cerr << "Failed to modify epoll for EPOLLOUT on fd " << fd << ": " << strerror(errno) << std::endl;
-            conn->close_connection();
-        }
         {
             std::lock_guard<std::mutex> lock(connections_mutex_);
             connections_[fd] = std::move(conn);
+        }
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+            std::cerr << "Failed to modify epoll for EPOLLOUT on fd " << fd << ": " << strerror(errno) << std::endl;
+            close_connection(fd);
         }
     }
 }
@@ -471,7 +448,6 @@ void Server::close_connection(int fd) {
 
     if (conn_to_close) {
         conn_to_close->close_connection(); // Ensure socket is closed
-        // unique_ptr will handle deallocation
     } else {
         std::cerr << "Warning: Attempted to close non-existent connection FD " << fd << std::endl;
     }

@@ -9,6 +9,8 @@
 #include <vector>
 #include <chrono>
 #include <memory> // For unique_ptr
+#include <fstream> // For file streaming
+#include <variant> // For std::variant
 
 namespace Oreshnek {
 namespace Net {
@@ -16,11 +18,16 @@ namespace Net {
 class Connection {
 public:
     static constexpr size_t READ_BUFFER_SIZE = 8192; // Common buffer size for network I/O
+    static constexpr size_t WRITE_BUFFER_CHUNK_SIZE = 4096; // Chunk size for sending file data
 
     int socket_fd_;
     std::vector<char> read_buffer_; // Buffer for incoming data
     size_t read_buffer_fill_ = 0; // Current fill level of the read buffer
-    std::string write_buffer_; // Buffer for outgoing data
+
+    // This will now hold either a string response or an active file stream
+    std::variant<std::string, std::unique_ptr<std::ifstream>> write_content_;
+    size_t file_bytes_sent_ = 0; // For file streaming: track bytes sent
+    bool headers_sent_ = false; // To ensure headers are sent only once
 
     Http::HttpParser http_parser_;
     Http::HttpRequest current_request_; // Holds the parsed request data
@@ -37,11 +44,12 @@ public:
     // Read data from socket into read_buffer_. Returns bytes read, 0 if connection closed, -1 on error.
     ssize_t read_data();
 
-    // Write data from write_buffer_ to socket. Returns bytes written, 0 if nothing to write, -1 on error.
+    // Write data to socket. Handles both string bodies and file streams.
+    // Returns bytes written, 0 if nothing to write, -1 on error.
     ssize_t write_data();
     
-    // Append data to the write buffer
-    void append_to_write_buffer(std::string_view data);
+    // Set the content to be written (either a string or a file path)
+    void set_response_content(const HttpResponse& response);
 
     // Process the read buffer to parse an HTTP request.
     // Returns true if a complete request is parsed and available in current_request_.
@@ -55,6 +63,7 @@ public:
     std::chrono::steady_clock::time_point get_last_activity() const { return last_activity_; }
     
     bool is_open() const { return socket_fd_ >= 0; }
+    bool has_data_to_write() const; // Check if there's any pending data (string or file)
 };
 
 } // namespace Net

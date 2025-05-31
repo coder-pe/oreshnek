@@ -18,6 +18,25 @@ file(GLOB_RECURSE ORESHNEK_SOURCES
     "src/*/*.cpp"
 )
 
+# --- Find OpenSSL ---
+find_package(OpenSSL REQUIRED)
+if (OPENSSL_FOUND)
+    message(STATUS "Found OpenSSL: ${OPENSSL_INCLUDE_DIR}")
+    include_directories(${OPENSSL_INCLUDE_DIR})
+    set(OPENSSL_LIBRARIES ${OPENSSL_LIBRARIES} ${OPENSSL_CRYPTO_LIBRARY}) # Add crypto library
+else()
+    message(FATAL_ERROR "OpenSSL not found. Please install it or specify its path.")
+endif()
+
+# --- Find SQLite3 ---
+find_package(SQLite3 REQUIRED)
+if (SQLITE3_FOUND)
+    message(STATUS "Found SQLite3: ${SQLITE3_INCLUDE_DIR}")
+    include_directories(${SQLITE3_INCLUDE_DIR})
+else()
+    message(FATAL_ERROR "SQLite3 not found. Please install it or specify its path.")
+endif()
+
 # Add the executable target
 add_executable(oreshnek_server ${ORESHNEK_SOURCES})
 
@@ -28,6 +47,8 @@ add_executable(oreshnek_server ${ORESHNEK_SOURCES})
 target_link_libraries(oreshnek_server
     pthread
     m # For std::stod if JsonParser uses it, or other math ops
+    ${OPENSSL_LIBRARIES} # Link OpenSSL libraries
+    ${SQLITE3_LIBRARIES} # Link SQLite3 libraries
     # rt # Optional, might not be needed depending on system/kernel
 )
 
