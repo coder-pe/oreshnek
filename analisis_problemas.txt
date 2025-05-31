@@ -1,0 +1,525 @@
+Comprendo que estás desarrollando un framework de REST API en C++17 llamado "Oreshnek" y buscas ayuda para corregir errores de compilación, optimizarlo y mejorarlo para lograr un rendimiento similar a ULib.
+
+He revisado los archivos `oreshnek.h`, `oreshnek.cpp`, `server.cpp` y `example.cpp`. Aquí te presento un análisis de los posibles errores y sugerencias para mejorarlo, centrándome en la optimización y el alto rendimiento.
+
+**Errores de Compilación y Problemas Potenciales:**
+
+1.  **Faltan includes esenciales:**
+    * `example.cpp` necesita `<ctime>` para `std::time`.
+    * Es posible que falten otros includes en general para funciones como `stoul`, `stod`, etc., aunque a veces están transitivamente incluidos. Asegúrate de que todos los encabezados necesarios para las funciones de la STL estén presentes.
+
+2.  **`JsonValue::parse` - Implementación simplificada y propensa a errores:**
+    * La función `JsonValue::parse` es muy básica y no es un parser JSON robusto. Esto causará problemas con JSONs más complejos (anidamiento, escapes, etc.). Para un framework de alto rendimiento, necesitarás un parser JSON de verdad.
+    * El uso de `std::stod` directamente en un `trimmed` string puede lanzar excepciones si el formato no es numérico puro, y no maneja bien los casos de borde.
+
+3.  **`HttpRequest::parse` - Manejo de cuerpo HTTP:**
+    * La lógica para leer el cuerpo HTTP en `HttpRequest::parse` asume que el cuerpo está completamente en el buffer después de los encabezados. Esto no siempre es cierto para solicitudes grandes y no maneja el caso de que el cuerpo se reciba en múltiples lecturas de socket.
+    * La búsqueda de `Content-Length:` se hace de forma básica. Debería ser insensible a mayúsculas/minúsculas y más robusta.
+    * No se está limpiando correctamente el buffer de la conexión después de un parseo exitoso en `Connection::read_request` si hay datos adicionales en el buffer (por ejemplo, el inicio de la siguiente solicitud en una conexión keep-alive).
+
+4.  **`HttpResponse::to_string` - Versión HTTP/2.0:**
+    * La implementación actual asume `HTTP/2.0` para el `is_http2_` flag. El protocolo HTTP/2.0 es binario y no utiliza el formato de texto `HTTP/2.0` en la línea de estado ni encabezados de texto de esta manera. Si el objetivo es soportar HTTP/2.0, esto requiere una implementación mucho más compleja del protocolo (manejo de *frames*, *streams*, compresión HPACK, etc.). Actualmente, solo se está cambiando el string de la versión. Lo más probable es que el framework esté apuntando a HTTP/1.1 con keep-alive.
+
+5.  **`Connection::read_request` - Relectura de datos y `buffer_`:**
+    * Si `read_request` no parsea una solicitud completa (porque necesita más datos), los datos parciales permanecen en `buffer_`. La siguiente llamada a `read_request` simplemente adjuntará nuevos datos, lo cual es correcto.
+    * Sin embargo, si se parsea una solicitud, `buffer_.clear()` se llama, lo que significa que si se recibieron partes de la *siguiente* solicitud en la misma lectura `recv`, esos datos se perderán. Deberías eliminar solo los bytes de la solicitud parseada del inicio del buffer, no todo el buffer.
+
+6.  **Manejo de errores de socket y epoll:**
+    * Algunas llamadas a `close()` en caso de error en `setup_socket` y `setup_epoll` pueden no ser suficientes o pueden cerrar un descriptor de archivo inválido si ya falló una asignación anterior. Es importante garantizar que los descriptores de archivo sean válidos antes de intentar cerrarlos.
+
+7.  **Soporte de `std::string_view` para rendimiento:**
+    * Muchas funciones de cadena de caracteres usan `std::string` por valor o referencia `const std::string&`. Para alto rendimiento y evitar copias innecesarias, considera usar `std::string_view` en las interfaces donde los datos solo se leen y no se modifican ni se requiere que la cadena sea nula terminada. Esto es especialmente útil para encabezados y parámetros de ruta.
+
+8.  **Manejo de `signal(SIGPIPE, SIG_IGN)`:**
+    * Es una buena práctica, ya que `send` en un socket cerrado normalmente generaría SIGPIPE. `MSG_NOSIGNAL` en `send` en `Connection::write_response` también ayuda.
+
+9.  **`Router::split_path` - Manejo de barras diagonales:**
+    * Tu `split_path` maneja bien las barras diagonales múltiples (ej. `/a//b`) y las barras iniciales/finales. Esto es bueno.
+
+10. **`JsonValue` - Raw pointers y manejo de memoria:**
+    * El uso de `new` y `delete` manual para `std::string`, `std::vector<JsonValue>`, y `std::unordered_map<std::string, JsonValue>` es propenso a fugas de memoria y errores si no se manejan con cuidado (copia, asignación, destructor). Aunque tienes `cleanup()` y `copy_from()`, esto es C++ moderno. Se recomienda encarecidamente usar `std::unique_ptr` o `std::variant` (C++17) junto con `std::string`, `std::vector`, `std::unordered_map` directamente para evitar la gestión manual de memoria y aprovechar el RAII.
+    * Si el objetivo es altísimo rendimiento y evitar asignaciones de memoria dinámicas para JSONs pequeños, se podría explorar la idea de un buffer fijo o optimizaciones más avanzadas, pero el uso de `std::string`, `std::vector` y `std::unordered_map` ya implica asignaciones dinámicas.
+
+**Mejoras y Optimizaciones para Alto Rendimiento (similar a ULib):**
+
+1.  **Reimplementación de `JsonValue` con `std::variant` (C++17) o `std::unique_ptr`:**
+    * Esta es la mejora más significativa en términos de robustez y seguridad de la memoria. En lugar de un `union` con punteros crudos, usa `std::variant<std::monostate, bool, double, std::string, std::vector<JsonValue>, std::unordered_map<std::string, JsonValue>>`. Esto eliminará la necesidad de `cleanup()`, `copy_from()`, `new` y `delete` manuales.
+    * Ejemplo de estructura con `std::variant`:
+        ```cpp
+        #include <variant>
+        // ...
+        class JsonValue {
+        private:
+            std::variant<std::monostate, bool, double, std::string, 
+                         std::vector<JsonValue>, std::unordered_map<std::string, JsonValue>> data_;
+        public:
+            // Constructores para diferentes tipos
+            JsonValue() : data_(std::monostate{}) {}
+            JsonValue(bool val) : data_(val) {}
+            JsonValue(double val) : data_(val) {}
+            JsonValue(const std::string& val) : data_(val) {}
+            JsonValue(const char* val) : data_(std::string(val)) {}
+
+            // Operadores [] y push_back necesitarían `std::get` y `std::holds_alternative`
+            // o crear el tipo si no es el esperado.
+        };
+        ```
+    * Si `std::variant` es demasiado complejo, usa `std::unique_ptr` para `str_val`, `arr_val`, `obj_val`.
+        ```cpp
+        // En JsonValue:
+        // std::unique_ptr<std::string> str_val;
+        // std::unique_ptr<std::vector<JsonValue>> arr_val;
+        // std::unique_ptr<std::unordered_map<std::string, JsonValue>> obj_val;
+        ```
+        Esto simplificará la copia y el destructor, ya que `unique_ptr` maneja la memoria.
+
+2.  **Parser JSON robusto y de alto rendimiento:**
+    * Para un framework serio, no puedes depender de un parser JSON simplificado. Integrar una biblioteca JSON de terceros probada y optimizada como `json.hpp` (de nlohmann/json) o RapidJSON es fundamental. RapidJSON es conocido por su rendimiento, mientras que `json.hpp` es muy fácil de usar.
+    * La elección depende del equilibrio entre facilidad de uso y rendimiento extremo.
+
+3.  **Optimizaciones de red (epoll, read/writev):**
+    * **Edge-triggered (EPOLLET) es un buen comienzo.** Esto requiere que leas/escribas hasta que `EAGAIN`/`EWOULDBLOCK` para drenar el buffer de la red. Tu código ya está haciendo esto con `while (true)` en `handle_new_connection` y el `while` en `Connection::read_request`.
+    * **`MSG_NOSIGNAL`:** Ya lo estás usando en `send`, lo cual es bueno para evitar SIGPIPE.
+    * **`readv`/`writev` (scatter/gather I/O):** Para HTTP/1.1, puedes usar `writev` para enviar la línea de estado, los encabezados y el cuerpo en una sola llamada al sistema, lo que reduce el *overhead* del kernel. Esto puede ser útil para respuestas grandes.
+    * **Buffers de menor copia:** Si el rendimiento del I/O es un cuello de botella, podrías considerar el uso de buffers directamente mapeados en memoria (ej., con `mmap` si es aplicable para archivos) o estrategias de "zero-copy" si es posible. Para un servidor REST típico, la mayor parte de la sobrecarga está en el procesamiento de la solicitud, no en la copia de la red, a menos que se sirvan archivos muy grandes.
+
+4.  **Optimización de cadenas y asignaciones de memoria:**
+    * **`std::string_view`:** Como se mencionó, usar `std::string_view` para pasar encabezados y parámetros de ruta. Esto evita copias de cadenas y puede mejorar significativamente el rendimiento, especialmente cuando se manejan muchas solicitudes.
+    * **Evitar concatenaciones de `std::string` excesivas:** En funciones como `HttpResponse::to_string` o `JsonValue::to_string`, concatenar strings repetidamente puede ser ineficiente. Considera usar un `std::stringstream` o construir la cadena de forma más eficiente si el rendimiento se convierte en un problema.
+    * **Precargar tamaño de buffers:** Si conoces el tamaño aproximado de las respuestas HTTP o los cuerpos JSON, puedes usar `std::string::reserve()` para evitar reasignaciones de memoria.
+
+5.  **Manejo de conexiones Keep-Alive:**
+    * Tu implementación de keep-alive es decente. El `EPOLLONESHOT` en epoll y la lógica de re-añadir la conexión a epoll después de procesar la solicitud son correctas.
+    * El `KEEP_ALIVE_TIMEOUT` es importante para cerrar conexiones inactivas y liberar recursos.
+
+6.  **ThreadPool - Optimización de colas y bloqueo:**
+    * Tu `ThreadPool` es una implementación estándar y funcional. Para rendimiento extremo, se podrían considerar colas sin bloqueo (`lock-free queues`), pero estas son mucho más complejas de implementar correctamente y solo ofrecen ganancias significativas en casos muy específicos de alta contención. Para la mayoría de las cargas de trabajo, `std::mutex` y `std::condition_variable` son suficientes y más seguras.
+    * Considera el número de hilos: `std::thread::hardware_concurrency()` es un buen punto de partida, pero para cargas de trabajo con mucho I/O bloqueante (aunque aquí usas I/O no bloqueante con epoll), a veces un número mayor de hilos puede ser beneficioso. Experimenta con esto.
+
+7.  **`HttpRequest::parse` - Buffer de lectura inteligente:**
+    * En `Connection::read_request`, cuando se parsea una solicitud y hay datos restantes en `buffer_` que pertenecen a la siguiente solicitud, NO debes `buffer_.clear()`. En su lugar, debes eliminar la parte de la solicitud ya parseada del inicio del buffer.
+        ```cpp
+        // Dentro de Connection::read_request, después de request.parse(request_data) exitoso
+        // y antes de 'return parsed;'
+        buffer_.erase(0, request_data.length()); // Elimina solo la solicitud procesada
+        ```
+    * Esto es crítico para el rendimiento y la corrección de las conexiones keep-alive que envían múltiples solicitudes en el mismo flujo TCP.
+
+8.  **Manejo de errores y logging:**
+    * Actualmente usas `std::cerr` para errores, lo cual es simple. Para un framework, considera una biblioteca de logging más robusta que permita niveles de log (DEBUG, INFO, WARN, ERROR), rotación de logs, etc.
+
+9.  **Validación de Entrada:**
+    * En tus *handlers* de ejemplo, ya estás haciendo validación básica de JSON. Esto es crucial para un API robusto. Para un framework, podrías considerar mecanismos de validación de esquema (por ejemplo, con JSON Schema) si la complejidad de los datos lo justifica.
+
+**Refactorización y Limpieza del Código (Ejemplo):**
+
+Aquí te muestro cómo podrías empezar a refactorizar `JsonValue` con `std::variant`:
+
+```cpp
+// oreshnek.h
+#ifndef ORESHNEK_H
+#define ORESHNEK_H
+
+#include <string>
+#include <unordered_map>
+#include <functional>
+#include <memory>
+#include <vector>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <chrono>
+#include <sstream>
+#include <iostream>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <cstring>
+#include <variant> // Add for std::variant
+#include <algorithm> // For std::transform, std::tolower
+
+namespace MiniRest {
+
+// Forward declarations
+class HttpRequest;
+class HttpResponse;
+class Connection;
+class Server;
+
+// HTTP Method enum
+enum class HttpMethod {
+    GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS
+};
+
+// JSON Value types (no longer strictly needed for type_ member with std::variant)
+// enum class JsonType {
+//     NULL_VALUE, BOOL, NUMBER, STRING, ARRAY, OBJECT
+// };
+
+// Fast JSON implementation
+class JsonValue {
+private:
+    // Using std::variant for type-safe and automatic memory management
+    std::variant<std::monostate, bool, double, std::string,
+                 std::vector<JsonValue>, std::unordered_map<std::string, JsonValue>> data_;
+
+public:
+    JsonValue() : data_(std::monostate{}) {}
+    JsonValue(bool val) : data_(val) {}
+    JsonValue(double val) : data_(val) {}
+    JsonValue(int val) : data_((double)val) {} // Implicit conversion for int to double
+    JsonValue(const std::string& val) : data_(val) {}
+    JsonValue(const char* val) : data_(std::string(val)) {}
+    
+    // No explicit destructor, copy constructor, or assignment operator needed with std::variant
+    // Rule of Zero applies here.
+
+    // Array operations
+    JsonValue& operator[](size_t index);
+    const JsonValue& operator[](size_t index) const;
+    void push_back(const JsonValue& val);
+    size_t size() const; // Added for array/object size checking
+
+    // Object operations
+    JsonValue& operator[](const std::string& key);
+    const JsonValue& operator[](const std::string& key) const;
+    
+    // Type checks and getters
+    // Helper to check current type
+    bool is_null() const { return std::holds_alternative<std::monostate>(data_); }
+    bool is_bool() const { return std::holds_alternative<bool>(data_); }
+    bool is_number() const { return std::holds_alternative<double>(data_); }
+    bool is_string() const { return std::holds_alternative<std::string>(data_); }
+    bool is_array() const { return std::holds_alternative<std::vector<JsonValue>>(data_); }
+    bool is_object() const { return std::holds_alternative<std::unordered_map<std::string, JsonValue>>(data_); }
+    
+    // Getters with std::get for type-safe access (will throw if type mismatch)
+    bool as_bool() const { return std::get<bool>(data_); }
+    double as_number() const { return std::get<double>(data_); }
+    const std::string& as_string() const { return std::get<std::string>(data_); }
+    const std::vector<JsonValue>& as_array() const { return std::get<std::vector<JsonValue>>(data_); }
+    const std::unordered_map<std::string, JsonValue>& as_object() const { return std::get<std::unordered_map<std::string, JsonValue>>(data_); }
+    
+    std::string to_string() const;
+    static JsonValue parse(const std::string& json); // This will need a serious overhaul
+
+private:
+    // Internal helpers to ensure type before access/modification
+    void ensure_array();
+    void ensure_object();
+};
+
+// ... (Rest of HttpRequest, HttpResponse, Router, Connection, ThreadPool, Server remain mostly the same in .h)
+
+} // namespace MiniRest
+
+#endif // ORESHNEK_H
+```
+
+```cpp
+// oreshnek.cpp (snippet for JsonValue)
+#include "oreshnek.h"
+#include <algorithm> // Required for std::transform, std::tolower
+#include <cctype>    // Required for ::tolower
+#include <stdexcept> // For std::runtime_error in JsonValue access
+
+namespace MiniRest {
+
+// ==================== JsonValue Implementation ====================
+
+// Removed cleanup(), copy_from(), make_array(), make_object()
+// and updated to ensure_array(), ensure_object()
+
+void JsonValue::ensure_array() {
+    if (!is_array()) {
+        data_ = std::vector<JsonValue>();
+    }
+}
+
+void JsonValue::ensure_object() {
+    if (!is_object()) {
+        data_ = std::unordered_map<std::string, JsonValue>();
+    }
+}
+
+JsonValue& JsonValue::operator[](size_t index) {
+    ensure_array();
+    std::vector<JsonValue>& arr = std::get<std::vector<JsonValue>>(data_);
+    if (index >= arr.size()) {
+        arr.resize(index + 1);
+    }
+    return arr[index];
+}
+
+const JsonValue& JsonValue::operator[](size_t index) const {
+    static JsonValue null_val; // For returning null on out-of-bounds access
+    if (!is_array() || index >= std::get<std::vector<JsonValue>>(data_).size()) {
+        return null_val;
+    }
+    return std::get<std::vector<JsonValue>>(data_)[index];
+}
+
+void JsonValue::push_back(const JsonValue& val) {
+    ensure_array();
+    std::get<std::vector<JsonValue>>(data_).push_back(val);
+}
+
+size_t JsonValue::size() const {
+    if (is_array()) {
+        return std::get<std::vector<JsonValue>>(data_).size();
+    } else if (is_object()) {
+        return std::get<std::unordered_map<std::string, JsonValue>>(data_).size();
+    }
+    return 0; // Or throw error for non-array/object types
+}
+
+JsonValue& JsonValue::operator[](const std::string& key) {
+    ensure_object();
+    return std::get<std::unordered_map<std::string, JsonValue>>(data_)[key];
+}
+
+const JsonValue& JsonValue::operator[](const std::string& key) const {
+    static JsonValue null_val;
+    if (!is_object()) {
+        return null_val;
+    }
+    const auto& obj = std::get<std::unordered_map<std::string, JsonValue>>(data_);
+    auto it = obj.find(key);
+    return (it != obj.end()) ? it->second : null_val;
+}
+
+std::string JsonValue::to_string() const {
+    // Visitor pattern for std::variant is ideal here
+    return std::visit([](auto&& arg) -> std::string {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, std::monostate>) {
+            return "null";
+        } else if constexpr (std::is_same_v<T, bool>) {
+            return arg ? "true" : "false";
+        } else if constexpr (std::is_same_v<T, double>) {
+            return std::to_string(arg);
+        } else if constexpr (std::is_same_v<T, std::string>) {
+            return "\"" + arg + "\"";
+        } else if constexpr (std::is_same_v<T, std::vector<JsonValue>>) {
+            std::string result = "[";
+            for (size_t i = 0; i < arg.size(); ++i) {
+                if (i > 0) result += ",";
+                result += arg[i].to_string();
+            }
+            result += "]";
+            return result;
+        } else if constexpr (std::is_same_v<T, std::unordered_map<std::string, JsonValue>>) {
+            std::string result = "{";
+            bool first = true;
+            for (const auto& pair : arg) {
+                if (!first) result += ",";
+                result += "\"" + pair.first + "\":" + pair.second.to_string();
+                first = false;
+            }
+            result += "}";
+            return result;
+        }
+        return ""; // Should not reach here
+    }, data_);
+}
+
+JsonValue JsonValue::parse(const std::string& json) {
+    // THIS NEEDS A PROPER JSON PARSER.
+    // The current implementation is highly unreliable for anything beyond simple flat values.
+    // Consider integrating a library like RapidJSON or nlohmann/json.
+    
+    JsonValue result;
+    if (json.empty()) return result;
+    
+    std::string trimmed = json;
+    // std::string::find_first_not_of and find_last_not_of can handle multiple chars
+    trimmed.erase(0, trimmed.find_first_not_of(" \t\n\r"));
+    trimmed.erase(trimmed.find_last_not_of(" \t\n\r") + 1);
+    
+    if (trimmed == "null") {
+        return JsonValue();
+    } else if (trimmed == "true") {
+        return JsonValue(true);
+    } else if (trimmed == "false") {
+        return JsonValue(false);
+    } else if (trimmed.length() >= 2 && trimmed[0] == '"' && trimmed.back() == '"') {
+        return JsonValue(trimmed.substr(1, trimmed.length() - 2));
+    } else if (!trimmed.empty() && (std::isdigit(trimmed[0]) || trimmed[0] == '-')) {
+        try {
+            return JsonValue(std::stod(trimmed));
+        } catch (const std::exception& e) {
+            // Handle error, perhaps return null JsonValue or throw
+            std::cerr << "JSON parse error: " << e.what() << " for number: " << trimmed << std::endl;
+            return JsonValue(); 
+        }
+    }
+    
+    // For arrays and objects, a simple string manipulation won't work.
+    // This is where a proper parser library is essential.
+    return result;
+}
+
+// ... (Rest of the file with updated Connection::read_request buffer handling)
+
+bool Connection::read_request(HttpRequest& request) {
+    char temp_buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
+    
+    while ((bytes_read = recv(socket_fd_, temp_buffer, BUFFER_SIZE - 1, 0)) > 0) {
+        temp_buffer[bytes_read] = '\0'; // Ensure null termination for string append
+        buffer_ += temp_buffer;
+        
+        // Check if we have complete request (HTTP/1.1)
+        size_t header_end = buffer_.find("\r\n\r\n");
+        if (header_end != std::string::npos) {
+            // Parse headers first to get Content-Length
+            std::string headers_only = buffer_.substr(0, header_end + 4);
+            HttpRequest temp_req; // Temporary request to parse headers for Content-Length
+            temp_req.parse(headers_only); // This will only parse headers and request line
+
+            size_t content_length = 0;
+            std::string content_length_str = temp_req.header("Content-Length");
+            if (!content_length_str.empty()) {
+                try {
+                    content_length = std::stoul(content_length_str);
+                } catch (const std::exception& e) {
+                    std::cerr << "Failed to parse Content-Length: " << e.what() << std::endl;
+                    keep_alive_ = false;
+                    return false; // Malformed header
+                }
+            }
+            
+            size_t body_start = header_end + 4;
+            if (buffer_.size() >= body_start + content_length) {
+                // We have the full request (headers + body)
+                update_activity();
+                
+                std::string full_request_data = buffer_.substr(0, body_start + content_length);
+                bool parsed = request.parse(full_request_data);
+                
+                // CRITICAL: Remove only the processed request data from the buffer
+                buffer_.erase(0, body_start + content_length); 
+                
+                return parsed;
+            } else {
+                // Need more data for body, break the loop and wait for more data
+                // The current buffer_ state is preserved for the next read_request call
+                break;
+            }
+        }
+    }
+    
+    if (bytes_read == 0) {
+        // Connection closed by client
+        keep_alive_ = false;
+        return false;
+    }
+    
+    if (bytes_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        // Real error occurred
+        keep_alive_ = false;
+        return false;
+    }
+    
+    return false; // Need more data (EAGAIN/EWOULDBLOCK or partial header)
+}
+
+// ... (Rest of the file)
+```
+
+**Pasos a seguir:**
+
+1.  **Refactorizar `JsonValue` con `std::variant`:** Implementa los cambios sugeridos para `JsonValue` en `oreshnek.h` y `oreshnek.cpp`. Asegúrate de que todos los usos de `JsonValue` en el código se adapten a la nueva estructura (usando `std::get`, `std::holds_alternative`, etc.).
+2.  **Integrar un Parser JSON de terceros:** Esta es la tarea más importante para la robustez del JSON. Elige entre RapidJSON (más performante, menos C++ moderno) o nlohmann/json (más fácil de usar, más C++ moderno).
+3.  **Corregir `Connection::read_request`:** Implementa la lógica de `buffer_.erase(0, body_start + content_length);` para evitar la pérdida de datos de la siguiente solicitud en conexiones keep-alive.
+4.  **Revisar todos los includes:** Asegúrate de que cada `.cpp` incluya todos los encabezados que necesita directamente.
+5.  **Compilar y probar incrementalmente:** Corrige los errores de compilación uno por uno. Luego, prueba con solicitudes simples GET, POST, PUT, DELETE para asegurarte de que la lógica básica funciona.
+
+Este es un buen punto de partida para tu framework. El uso de `epoll` y un *thread pool* son excelentes bases para un servidor de alto rendimiento. ¡Mucho éxito con "Oreshnek"!
+It's great that you're building a high-performance C++17 REST API framework! This is an ambitious and rewarding project. Let's break down the common issues that lead to compilation errors and explore areas for improvement and optimization, keeping in mind the goal of high performance similar to ULib.
+
+To give you the most accurate help, I'll need to know the specific compilation errors you're encountering. Please provide the output from your compiler (g++ or clang++). This will allow me to pinpoint the exact issues.
+
+However, based on the provided code snippets and common pitfalls in C++ socket programming and framework development, I can offer general guidance and identify potential areas of concern and improvement.
+
+### General Areas for Correction and Improvement
+
+Without specific compilation errors, I'll address common issues and best practices for a C++17 high-performance REST API.
+
+#### 1. JSON Parsing and Handling (`JsonValue` class)
+
+* **Memory Management in `JsonValue`**: Your `JsonValue` class uses a `union` for different types and manually manages memory with `new` and `delete` for `std::string`, `std::vector<JsonValue>`, and `std::unordered_map<std::string, JsonValue>`. This is highly prone to errors like memory leaks, double-freeing, and use-after-free, especially in copy constructors, assignment operators, and destructors.
+    * **Recommendation**:
+        * **Use `std::variant` (C++17)**: This is the ideal solution for a sum type like `JsonValue`. It automatically handles memory management and type safety.
+        * **Smart Pointers**: If `std::variant` is not feasible for some reason, use smart pointers (e.g., `std::unique_ptr` or `std::shared_ptr`) for the dynamically allocated members (`str_val`, `arr_val`, `obj_val`) within the union. This would still be complex with a union.
+        * **Rule of Five/Zero**: If you stick with raw pointers, you *must* correctly implement the copy constructor, copy assignment operator, move constructor, move assignment operator, and destructor (the Rule of Five). Or, preferably, leverage the Rule of Zero by using `std::variant` or smart pointers to let the compiler generate these correctly.
+* **`JsonValue::copy_from` and `cleanup`**: These methods, while attempting to manage memory, are fragile. For example, `copy_from` assumes the `type_` is set correctly *before* calling `cleanup`, and `cleanup` doesn't protect against `nullptr` dereferences if a value was never assigned.
+* **JSON Parsing (Lexer/Parser)**: The provided snippets don't show the actual JSON parsing logic. This is a critical component for performance and correctness.
+    * **Recommendation**: Consider using a battle-tested, fast JSON parsing library like `RapidJSON` or `Nlohmann/json` (though `Nlohmann/json` might be slower for extreme performance needs). If you're implementing your own, ensure it's efficient, handles all JSON edge cases (e.g., escaped characters, numbers with decimals/exponents, `null`, `true`, `false`), and avoids excessive string copying.
+* **JSON String Handling**: When parsing JSON strings, be careful with `std::string::find_first_not_of` and `std::string::find_last_not_of` for trimming. The characters to trim should include space, tab, newline, and carriage return characters (`" \t\n\r"`).
+
+#### 2. Network and Socket Handling (`Server` and `Connection` classes)
+
+* **`epoll` Usage**: Your `Server` class correctly identifies `epoll` as the mechanism for high-performance I/O multiplexing on Linux.
+    * **Improvements**:
+        * **Edge-Triggered (ET) vs. Level-Triggered (LT)**: By default, `epoll` is level-triggered. For higher performance and to avoid unnecessary wakeups, consider using edge-triggered mode (`EPOLLET`). If you use ET, you *must* read/write until `EAGAIN` or `EWOULDBLOCK` to avoid missing events. This means your `Connection::read_data` and `Connection::send_data` loops that `continue` on `EAGAIN` are good, but you need to ensure they handle partial reads/writes correctly and don't block indefinitely.
+        * **Event Data (`epoll_event::data`)**: You're storing `fd` in `events[i].data.fd`. For more complex scenarios, you might store a pointer to your `Connection` object directly in `events[i].data.ptr` to avoid a map lookup for every event. This would require careful memory management of the `Connection` objects.
+        * **Error Handling in `epoll_wait`**: You handle `EINTR` (interrupted by signal) and `strerror(errno)` for `epoll_wait` failure. This is good.
+* **`Connection` Management**: The `Server` stores `std::unique_ptr<Connection>` in a `std::unordered_map`. This is a good approach for managing connection lifetimes.
+    * **Cleanup of Expired Connections**: Your periodic cleanup is a good idea. Ensure the `Connection::close_connection()` properly removes the file descriptor from `epoll` before closing it.
+* **Non-Blocking Sockets**: You correctly set sockets to non-blocking mode using `fcntl(fd, F_SETFL, flags | O_NONBLOCK)`.
+* **`SO_REUSEADDR` and `SO_KEEPALIVE`**: Enabling `SO_REUSEADDR` is crucial for quickly restarting the server after a crash or shutdown. `SO_KEEPALIVE` helps detect dead peers.
+* **Send/Receive Loops**: The `Connection::send_data` loop correctly handles partial writes and `EAGAIN`/`EWOULDBLOCK`. The same logic should apply to `read_data` to ensure all available data is read from the socket in non-blocking mode.
+* **Buffer Management**: For high performance, consider using pre-allocated buffers or a buffer pool to minimize dynamic memory allocations during read/write operations.
+
+#### 3. Thread Pool (`ThreadPool` class)
+
+* **Correctness**: Your `ThreadPool` implementation with `std::unique_lock`, `std::condition_variable`, and `std::queue` for tasks appears fundamentally correct for a basic thread pool.
+* **Shutdown**: The shutdown mechanism (`stop_ = true; condition_.notify_all(); for (std::thread& worker : workers_) { if (worker.joinable()) worker.join(); }`) is generally correct to ensure all threads finish their current tasks and then terminate gracefully.
+* **Optimization**:
+    * **Task Queue**: For extremely high-performance scenarios, a lock-free queue or a bounded queue might be considered to reduce contention on the `queue_mutex_`. However, `std::mutex` and `std::condition_variable` are usually sufficient and simpler to reason about for most thread pool uses.
+    * **Work Stealing**: For highly varied task workloads, a work-stealing thread pool could offer better load balancing and performance.
+
+#### 4. HTTP Request/Response Handling (`HttpRequest`, `HttpResponse`, `Router`)
+
+* **Parsing HTTP Requests**: This is where much of the performance can be gained or lost.
+    * **Efficient Parsing**: Avoid excessive string copying. Parse the request line and headers in place as much as possible.
+    * **Header Parsing**: Be efficient in parsing headers. Use optimized string searching (e.g., Boyer-Moore variant) or character-by-character parsing with state machines.
+    * **Body Parsing**: Handle different `Content-Type` headers, especially `application/json` for your API.
+* **Response Generation**:
+    * **No unnecessary copies**: When sending responses, especially JSON, try to serialize directly to the buffer to be sent, or use `std::string_view` for parts of the response that can refer to static strings (e.g., status messages).
+    * **HTTP/1.1 Keep-Alive**: Ensure your `Connection` and `Server` correctly handle `Keep-Alive` headers to reuse TCP connections, which is crucial for performance. Your `Connection::keep_alive_` flag indicates this is being considered.
+* **Routing**: The `Router` likely uses string matching for paths.
+    * **Path Parameters**: Your `example.cpp` shows handling path parameters like `/api/user/:id`. Ensure this parsing is efficient. Regular expressions can be powerful but can be slow if not used carefully.
+
+#### 5. General C++ Best Practices and Optimizations
+
+* **`const` Correctness**: Apply `const` extensively to method parameters and member functions where state is not modified. This helps the compiler with optimizations and improves code clarity.
+* **Move Semantics**: Leverage C++11 move semantics (move constructors, move assignment operators) to avoid unnecessary deep copies of objects, especially `std::string`, `std::vector`, and `std::unordered_map`.
+* **`noexcept`**: Mark functions that do not throw exceptions with `noexcept` to allow the compiler to generate more optimized code.
+* **PIMPL Idiom**: For larger classes, the Pointer to Implementation (PIMPL) idiom can reduce compile times by minimizing header dependencies.
+* **Minimize Dynamic Allocations**: Frequent `new`/`delete` calls can lead to performance overhead and fragmentation. Try to minimize them, perhaps by using custom allocators or object pools for frequently created objects like `HttpRequest` or `HttpResponse` if they are short-lived and numerous.
+* **Include Guards**: Ensure all header files have include guards (`#ifndef`, `#define`, `#endif`). You already have this in `oreshnek.h`.
+* **Error Handling**: Consistent and robust error handling is crucial for a production-ready server. Log errors effectively with `std::cerr` or a more sophisticated logging library.
+* **Benchmarking**: To truly optimize for "high performance," you'll need to benchmark your framework against various workloads (e.g., different numbers of concurrent connections, request sizes, response sizes, CPU-bound vs. I/O-bound handlers). Tools like `wrk` or `ApacheBench` can be helpful.
+
+### How to get specific help with compilation errors:
+
+1.  **Compile your code with maximum warnings**:
+    `g++ -std=c++17 -Wall -Wextra -pedantic -g server.cpp oreshnek.cpp example.cpp -o oreshnek_server -pthread`
+    (Add other source files if you have them).
+    * `-Wall`, `-Wextra`, `-pedantic`: Enable many warnings.
+    * `-g`: Include debugging information.
+    * `-pthread`: Link with pthreads for `std::thread`, `std::mutex`, etc.
+2.  **Paste the *complete* error output**: Copy and paste all the error messages and warnings you get from the compiler. This output is critical as it tells us:
+    * The file and line number where the error occurred.
+    * The type of error (e.g., undefined reference, type mismatch, missing semicolon).
+    * Often, suggestions for fixing the error.
+
+Once you provide the compilation errors, I can give you more targeted and actionable corrections.

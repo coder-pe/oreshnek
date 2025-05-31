@@ -1,0 +1,217 @@
+Comprendo perfectamente tu objetivo de transformar "Oreshnek" en un framework de REST API en C++17 de altísimo rendimiento, similar a ULib. He revisado el análisis de problemas y el código base que proporcionaste.
+
+La reestructuración en archivos y carpetas separadas, junto con la optimización para alto rendimiento, requiere un enfoque sistemático. Aquí te presento una propuesta detallada para la reimplementación, abordando los puntos críticos y sugiriendo mejoras basadas en las mejores prácticas de frameworks de alto rendimiento:
+
+## Propuesta de Reestructuración y Reimplementación para Oreshnek
+
+### Estructura de Directorios
+
+Para una mejor legibilidad y mantenibilidad, propongo la siguiente estructura de directorios:
+
+```
+oreshnek/
+├── include/
+│   ├── oreshnek/
+│   │   ├── http/
+│   │   │   ├── HttpRequest.h
+│   │   │   ├── HttpResponse.h
+│   │   │   ├── HttpParser.h  (Nueva clase para parsing HTTP eficiente)
+│   │   │   └── HttpEnums.h    (Enums como HttpMethod, HttpStatus)
+│   │   ├── json/
+│   │   │   ├── JsonValue.h
+│   │   │   ├── JsonParser.h   (Nueva clase para parsing JSON robusto)
+│   │   │   └── JsonBuilder.h  (Opcional, para construcción eficiente de JSON)
+│   │   ├── net/
+│   │   │   ├── Connection.h
+│   │   │   ├── SocketUtil.h   (Funciones de utilidad para sockets)
+│   │   │   └── EpollManager.h (Clase para manejar epoll, si no está en Server)
+│   │   ├── server/
+│   │   │   ├── Server.h
+│   │   │   ├── Router.h
+│   │   │   ├── ThreadPool.h
+│   │   │   └── RouteHandler.h (Typedefs para handlers de rutas)
+│   │   ├── utils/
+│   │   │   ├── StringUtil.h   (Funciones de utilidad para strings, e.g., trim, split)
+│   │   │   ├── Logger.h       (Sistema de logging)
+│   │   │   └── TimeUtil.h     (Funciones de utilidad para tiempo)
+│   │   └── Oreshnek.h         (Archivo de inclusión principal, para conveniencia)
+├── src/
+│   ├── http/
+│   │   ├── HttpRequest.cpp
+│   │   ├── HttpResponse.cpp
+│   │   └── HttpParser.cpp
+│   ├── json/
+│   │   ├── JsonValue.cpp
+│   │   └── JsonParser.cpp
+│   ├── net/
+│   │   ├── Connection.cpp
+│   │   ├── SocketUtil.cpp
+│   │   └── EpollManager.cpp
+│   ├── server/
+│   │   ├── Server.cpp
+│   │   ├── Router.cpp
+│   │   └── ThreadPool.cpp
+│   ├── utils/
+│   │   ├── StringUtil.cpp
+│   │   ├── Logger.cpp
+│   │   └── TimeUtil.cpp
+│   └── main.cpp               (El antiguo example.cpp se moverá aquí, con la lógica principal del servidor)
+├── tests/                     (Para pruebas unitarias e de integración)
+│   ├── http_test.cpp
+│   ├── json_test.cpp
+│   └── server_test.cpp
+├── CMakeLists.txt             (Para construir el proyecto)
+└── README.md
+```
+
+### Análisis de Problemas y Sugerencias de Reimplementación (Basado en `analisis_problemas.txt`)
+
+Vamos a abordar cada punto de tu análisis y proponer soluciones de alto rendimiento:
+
+#### 1. Faltan includes esenciales:
+* **Solución:** La nueva estructura de archivos ayudará a identificar y agregar los includes necesarios de manera modular. Cada archivo `.cpp` incluirá solo los headers que realmente necesita. `Oreshnek.h` será un header de conveniencia para incluir todo el framework.
+
+#### 2. `JsonValue::parse` - Implementación simplificada y propensa a errores:
+Este es un punto CRÍTICO para el rendimiento y la robustez. Un parser JSON manual y básico no será eficiente ni seguro.
+* **Problema:** Tu `JsonValue::parse` actual no es un parser JSON robusto.
+* **Solución de Alto Rendimiento:**
+    * **Integrar una librería JSON externa:** Para un rendimiento similar a ULib y robustez, la opción más sensata es integrar una librería JSON rápida y probada. Algunas opciones excelentes en C++ son:
+        * **RapidJSON:** Altamente optimizado para rendimiento, con una API de "DOM" y "SAX". Es una librería "header-only", lo que simplifica la integración.
+        * **PicoJSON / Nlohmann/json:** Son más fáciles de usar, pero RapidJSON es generalmente más rápido para parsing masivo.
+    * **SAX vs. DOM:** Para alto rendimiento, considera usar un parser basado en SAX si solo necesitas procesar ciertos campos sin construir todo el árbol JSON en memoria. Si necesitas un DOM (Document Object Model) completo para fácil manipulación, RapidJSON es una buena opción.
+    * **Optimización de `JsonValue`:** Si insistes en mantener tu propia `JsonValue`, necesitas:
+        * **Un parser JSON de verdad:** Implementar un parser de máquina de estados o recursivo descendente que maneje toda la especificación JSON (anidamiento, escapes, unicode, números, etc.). Esto es un esfuerzo significativo.
+        * **Manejo de excepciones/errores robusto:** En lugar de `std::stod` directamente, usa funciones más controladas o valida el formato numérico antes de la conversión.
+        * **Evitar copias innecesarias:** Cuando sea posible, usa vistas (`std::string_view`) o referencias constantes para evitar copias de datos al parsear.
+
+#### 3. `HttpRequest::parse` - Manejo de cuerpo HTTP:
+* **Problema:** Asume que todo el cuerpo está en el buffer y no maneja lectura asíncrona o chunks.
+* **Solución de Alto Rendimiento:**
+    * **Lectura no bloqueante y bufferizado:**
+        * El `Connection` debe tener un buffer de lectura. `HttpRequest::parse` debe trabajar sobre este buffer, no sobre una lectura completa del socket.
+        * Implementar un parser HTTP incremental (similar a un parser de estado) que pueda procesar datos a medida que llegan del socket, sin esperar a que el mensaje completo esté disponible.
+        * **Librerías de parsing HTTP:** Considera librerías como `http-parser` de Node.js (escrita en C, muy rápida) o implementaciones similares en C++.
+    * **`Content-Length` y `Transfer-Encoding: chunked`:** El parser debe manejar correctamente ambos. Para `chunked`, los datos llegan en múltiples "chunks" y deben ser ensamblados.
+    * **Límite de tamaño del cuerpo:** Implementar un límite configurable para el tamaño del cuerpo de la solicitud para prevenir ataques de denegación de servicio (DoS) por cuerpos excesivamente grandes.
+
+#### 4. `HttpRequest::parse` - Búsqueda de headers ineficiente:
+* **Problema:** `find` y `substr` repetidos son lentos.
+* **Solución de Alto Rendimiento:**
+    * **Pre-parseo y almacenamiento eficiente de headers:**
+        * Al leer los headers, parsearlos y almacenarlos en un `std::unordered_map<std::string_view, std::string_view>` (o un `std::map` si el orden es importante, pero `unordered_map` es más rápido para lookups) donde `std::string_view` apunte directamente a las partes del buffer de entrada, evitando copias.
+        * Normalizar los nombres de los headers (e.g., convertir a minúsculas o camel-case consistente) para facilitar la búsqueda.
+    * **Pre-parsing de ruta y query parameters:** De manera similar, parsear la ruta y los parámetros de consulta una sola vez y almacenarlos eficientemente.
+
+#### 5. Excesivas copias de strings y objetos `JsonValue`:
+* **Problema:** Copias constantes de `std::string` y `JsonValue` impactan el rendimiento.
+* **Solución de Alto Rendimiento:**
+    * **Usar `std::string_view`:** Donde sea posible (especialmente para datos de entrada como headers, partes de la ruta, etc.), usa `std::string_view` para referenciar los datos en el buffer de entrada en lugar de copiarlos. Esto es crucial.
+    * **`std::move`:** Utilizar `std::move` al pasar objetos para transferir la propiedad y evitar copias si el objeto original no se necesita más.
+    * **`JsonValue` optimización:**
+        * **Unión para tipos:** Ya la tienes, lo cual es bueno.
+        * **Asignación y copia eficientes:** Asegúrate de que los constructores de copia, operadores de asignación y destructores de `JsonValue` sean eficientes y manejen correctamente la memoria (tu implementación actual ya lo hace bastante bien, pero revísala con cuidado para cada tipo).
+        * **Pre-asignación de memoria:** Si conoces el tamaño aproximado de un `std::vector<JsonValue>` (para arrays) o `std::unordered_map<std::string, JsonValue>` (para objetos), usa `reserve()` para evitar reasignaciones.
+
+#### 6. Pool de hilos sin un mecanismo de "stop" robusto:
+* **Problema:** El `ThreadPool` actual puede tener problemas de shutdown y manejo de tareas pendientes.
+* **Solución de Alto Rendimiento:**
+    * **Shutdown ordenado:**
+        * Asegura que `stop_` se establezca y `condition_.notify_all()` se llame antes de que los hilos intenten unirse.
+        * Considera un método `wait_for_completion()` en el `ThreadPool` si necesitas que todas las tareas en cola terminen antes de que el pool se detenga.
+    * **Gestión de tareas pendientes:** Decide si las tareas pendientes deben ser procesadas o descartadas al detener el servidor.
+
+#### 7. `Connection` - Problemas de lectura/escritura y timeout:
+* **Problema:** `read` y `write` bloqueantes, manejo básico de `EAGAIN`/`EWOULDBLOCK`, falta de manejo de timeouts en la conexión.
+* **Solución de Alto Rendimiento:**
+    * **I/O Asíncrono (Epoll):** Ya usas epoll, lo cual es excelente. Asegúrate de que las operaciones de lectura y escritura se manejen de manera completamente no bloqueante con `EAGAIN`/`EWOULDBLOCK` y se registren para eventos `EPOLLIN`/`EPOLLOUT` según sea necesario.
+    * **Buffer de conexión:** Cada `Connection` debe tener un buffer de lectura y un buffer de escritura.
+        * Las lecturas del socket van al buffer de lectura. El parser HTTP consume de este buffer.
+        * Las respuestas se construyen en el buffer de escritura y se envían al socket.
+    * **Manejo de `EPOLLOUT`:** Solo registrarse para `EPOLLOUT` cuando haya datos para enviar y el `send` anterior devolvió `EAGAIN`. Desactivar `EPOLLOUT` una vez que todos los datos se han enviado.
+    * **Timeouts de inactividad:** Implementar un mecanismo de timeout para cerrar conexiones inactivas. Esto puede hacerse:
+        * **Árbol de tiempos (timing wheel / red-black tree):** Almacenar conexiones ordenadas por su tiempo de actividad para un cierre eficiente.
+        * **Tareas periódicas de cleanup:** La que ya tienes es un buen inicio, pero optimiza la búsqueda de conexiones expiradas.
+
+#### 8. Router:
+* **Problema:** Tu router actual usa una lógica de `find` y `replace` para los parámetros de ruta, lo cual puede ser ineficiente.
+* **Solución de Alto Rendimiento:**
+    * **Enrutamiento basado en árbol (Trie/Radix Tree):** Para rutas complejas y con muchos parámetros, un árbol Trie o un Radix Tree (similar a cómo lo hacen frameworks como `Go's httprouter` o `Rust's Actix-Web`) es mucho más rápido que la búsqueda lineal.
+        * Permite un emparejamiento eficiente de rutas con parámetros (`/api/user/:id`).
+        * Puedes implementar una versión simple o buscar referencias.
+    * **Hashing de rutas:** Para rutas estáticas, un `std::unordered_map` con un hash de la ruta completa puede ser muy rápido. La combinación de Trie para rutas dinámicas y hash para estáticas es potente.
+
+#### 9. Errores de compilación y advertencias (además de los ya mencionados):
+* **Solución:**
+    * **Compilar con máxima advertencia:** `g++ -std=c++17 -Wall -Wextra -pedantic -g -pthread ...` es fundamental.
+    * **Corregir warnings:** Cada warning es una posible fuente de error o ineficiencia.
+    * **Uso correcto de la STL:** Asegúrate de usar algoritmos y contenedores de la STL de manera idiomática y eficiente.
+
+### Consideraciones Adicionales para Alto Rendimiento (Inspirado en ULib):
+
+1.  **Manejo de Memoria:**
+    * **Evitar asignaciones/desasignaciones frecuentes:** Reutiliza buffers y objetos siempre que sea posible (por ejemplo, pools de objetos para `HttpRequest`, `HttpResponse`, etc.).
+    * **Custom Allocators:** Para situaciones extremadamente críticas, considera implementaciones de allocators personalizados o arenas de memoria para reducir la sobrecarga de `new`/`delete`.
+2.  **Multithreading y Concurrencia:**
+    * **Modelo Reactor/Proactor:** Tu uso de epoll se inclina hacia un modelo Reactor. Asegúrate de que el trabajo pesado (ejecución del handler) se descargue a un `ThreadPool` para no bloquear el hilo de I/O.
+    * **Contention en locks:** Minimiza el tiempo que los hilos mantienen locks (`std::mutex`). Usa `std::atomic` para contadores o flags simples donde sea posible.
+    * **Sharding de conexiones/recursos:** Si el número de conexiones es extremadamente alto, podrías sharding las conexiones entre múltiples hilos de I/O (aunque para la mayoría de los casos, un solo hilo de epoll y un thread pool para el procesamiento es suficiente).
+3.  **Serialización/Deserialización:**
+    * **JSON Fast Path:** Para respuestas JSON, si el JSON es estático o muy predecible, pre-generarlo y enviarlo como un `const char*` o `std::string_view` puede ser mucho más rápido que construir un `JsonValue` y serializarlo en cada solicitud.
+    * **Zero-copy JSON:** Librerías como RapidJSON permiten parsing y escritura con un mínimo de copias.
+4.  **Logging:**
+    * **Asynchronous Logging:** Para evitar que las operaciones de logging bloqueen el rendimiento, implementa un logger asíncrono que ponga los mensajes en una cola y un hilo de fondo los escriba.
+    * **Niveles de logging:** Permite configurar diferentes niveles de logging (DEBUG, INFO, WARN, ERROR) para reducir la sobrecarga en producción.
+5.  **Benchmarking:**
+    * Como se menciona en tu análisis, es crucial. Utiliza herramientas como `wrk`, `ApacheBench`, `JMeter`, `k6` para medir el rendimiento bajo diferentes cargas y tipos de solicitudes.
+
+### Pasos Siguientes
+
+1.  **Reestructurar Directorios:** Crea la nueva estructura de directorios.
+2.  **Mover Archivos:** Mueve tus archivos `.h` y `.cpp` existentes a las nuevas ubicaciones.
+3.  **Actualizar Includes:** Ajusta los includes en todos los archivos para que apunten a las nuevas rutas (e.g., `#include "oreshnek/http/HttpRequest.h"`).
+4.  **Configurar CMake:** Crea un `CMakeLists.txt` robusto para compilar tu proyecto. Esto es esencial para un proyecto de este tamaño.
+    * Ejemplo básico de `CMakeLists.txt`:
+        ```cmake
+        cmake_minimum_required(VERSION 3.10)
+        project(OreshnekServer CXX)
+
+        set(CMAKE_CXX_STANDARD 17)
+        set(CMAKE_CXX_STANDARD_REQUIRED ON)
+        set(CMAKE_POSITION_INDEPENDENT_CODE ON) # Good for shared libraries and some optimizations
+
+        # Define include directories
+        include_directories(
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+
+        # Find all source files
+        file(GLOB_RECURSE ORESHNEK_SOURCES
+            "src/*.cpp"
+            "src/*/*.cpp"
+        )
+
+        add_executable(oreshnek_server ${ORESHNEK_SOURCES})
+
+        # Link necessary libraries
+        target_link_libraries(oreshnek_server
+            pthread # For std::thread, std::mutex, etc.
+        )
+
+        # Enable maximum warnings
+        target_compile_options(oreshnek_server PRIVATE
+            -Wall
+            -Wextra
+            -pedantic
+            -g
+        )
+        ```
+5.  **Comenzar la Reimplementación Modular:**
+    * **JSON:** Este es el primer gran escollo. Decide si usar una librería externa o reimplementar. Si reimplementas, enfócate en `JsonParser.h/.cpp` y `JsonValue.h/.cpp` para que sea robusto.
+    * **HTTP Parser:** Crea `HttpParser.h/.cpp` para manejar la lectura incremental y el parseo eficiente de solicitudes HTTP.
+    * **Router:** Mejora el `Router` con un enfoque más eficiente para el emparejamiento de rutas.
+    * **Connection:** Refina la clase `Connection` para manejar buffers de I/O y timeouts de manera más eficiente.
+    * **Logging y Utilidades:** Implementa un sistema de logging simple y las utilidades de string/tiempo.
+
+**Una vez que hayas reestructurado los archivos y tengas un `CMakeLists.txt` que compile la estructura básica (aunque el código aún no sea perfecto), por favor, compila y si encuentras errores (que es muy probable debido a los cambios de rutas de includes y la lógica), pega el *output completo de los errores de compilación*. Con eso, podré brindarte ayuda mucho más específica y directa.**
+
+Este es un proyecto ambicioso pero muy gratificante. ¡Vamos a ello!
