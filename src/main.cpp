@@ -375,8 +375,10 @@ int main() {
             res.header("Content-Type", "application/json"); // [cite: 325]
             
             if (req.body().empty()) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Empty body";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Empty body";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
@@ -388,15 +390,19 @@ int main() {
             auto role_it = form_data.find("role");
 
             if (username_it == form_data.end() || email_it == form_data.end() || password_it == form_data.end()) { // [cite: 326]
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Missing required fields"; // [cite: 327]
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Missing required fields";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
             // Basic validation (can be enhanced significantly) [cite: 5]
             if (username_it->second.empty() || email_it->second.empty() || password_it->second.empty()) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Fields cannot be empty";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Fields cannot be empty";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
             // Email format and uniqueness validation [cite: 5]
@@ -409,8 +415,10 @@ int main() {
 
             // Check if user already exists [cite: 329]
             if (g_db_manager->getUserByUsername(new_user.username).id != 0) {
-                res.status(Oreshnek::Http::HttpStatus::CONFLICT)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "User already exists"; // [cite: 330]
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "User already exists";
+                res.status(Oreshnek::Http::HttpStatus::CONFLICT).json(error_json);
                 return;
             }
 
@@ -430,8 +438,10 @@ int main() {
             res.header("Content-Type", "application/json"); // [cite: 313]
 
             if (req.body().empty()) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Empty body";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Empty body";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
@@ -439,16 +449,20 @@ int main() {
             auto username_it = form_data.find("username");
             auto password_it = form_data.find("password");
 
-            if (username_it == form_data.end() || password_it == form_data.end()) { // [cite: 314]
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Missing required fields"; // [cite: 315]
+            if (username_it == form_data.end() || password_it == form_data.end()) {
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Missing required fields";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
             Oreshnek::Platform::User user = g_db_manager->getUserByUsername(username_it->second); // [cite: 317]
             if (user.id == 0) { // User not found
-                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "User not found"; // [cite: 318]
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "User not found";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
 
@@ -457,8 +471,10 @@ int main() {
             std::string password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt); // [cite: 321]
 
             if (password_hash != user.password_hash) {
-                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Incorrect password"; // [cite: 322]
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Incorrect password";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
 
@@ -482,8 +498,10 @@ int main() {
 
             auto auth_header = req.header("Authorization"); // [cite: 337]
             if (!auth_header) {
-                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Authentication token required"; // [cite: 338]
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Authentication token required";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
 
@@ -491,22 +509,28 @@ int main() {
             if (token.length() > 7 && token.substr(0, 7) == "Bearer ") { // [cite: 340]
                 token = token.substr(7); // [cite: 341]
             } else {
-                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Invalid Authorization header format";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Invalid Authorization header format";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
             
             if (!Oreshnek::Platform::SecurityUtils::validateJWT(token, g_server_config.jwt_secret)) { // [cite: 342]
-                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Invalid token"; // [cite: 343]
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Invalid token";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
 
             // Extract user_id from JWT payload
             nlohmann::json jwt_payload = Oreshnek::Platform::SecurityUtils::decodeJWT(token);
             if (jwt_payload.is_null() || !jwt_payload.contains("user_id")) {
-                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Invalid token payload";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Invalid token payload";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
             int user_id = jwt_payload["user_id"].get<int>();
@@ -514,8 +538,10 @@ int main() {
             // Simplified multipart/form-data parsing
             auto content_type_header_opt = req.header("Content-Type");
             if (!content_type_header_opt || content_type_header_opt->find("multipart/form-data") == std::string_view::npos) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Content-Type must be multipart/form-data";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Content-Type must be multipart/form-data";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
@@ -529,8 +555,10 @@ int main() {
             std::string filename_in_uploads = form_data["video_filename"]; // filename from parse_multipart_form_data
 
             if (title.empty() || filename_in_uploads.empty()) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Missing title or video file";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Missing title or video file";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
@@ -745,8 +773,10 @@ int main() {
 
             std::optional<std::string_view> id_opt = req.param("id");
             if (!id_opt) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Missing video ID";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Missing video ID";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
 
@@ -754,8 +784,10 @@ int main() {
             try {
                 video_id = std::stoi(std::string(*id_opt));
             } catch (const std::exception& e) {
-                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Invalid video ID format";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Invalid video ID format";
+                res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
             
@@ -772,8 +804,10 @@ int main() {
             }
 
             if (found_video.id == 0) { // Video not found
-                res.status(Oreshnek::Http::HttpStatus::NOT_FOUND)
-                   .json(Oreshnek::JsonValue::object()["success"] = false)["message"] = "Video not found";
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Video not found";
+                res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).json(error_json);
                 return;
             }
 

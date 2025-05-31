@@ -7,6 +7,8 @@
 #include <sqlite3.h>
 #include <vector> // Required for std::vector
 #include <string_view> // Required for std::string_view
+#include <thread>
+#include <iostream>
 
 // Forward declarations to avoid circular includes for models if they were in separate files
 // For now, assuming they are defined directly in this header or a common models header
@@ -27,6 +29,7 @@ struct ServerConfig {
     std::string jwt_secret = "your-super-secret-jwt-key-change-this"; // [cite: 63]
     int jwt_expire_hours = 24;
     size_t max_file_size = 500 * 1024 * 1024; // 500MB
+    std::string host = "0.0.0.0"; // Add this line
 };
 
 // User struct (from your platform_video_streaming.txt) [cite: 64]
