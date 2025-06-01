@@ -408,6 +408,16 @@ void Server::handle_write_ready(int fd) {
 }
 
 void Server::close_connection(int fd) {
+    // 1. Remove from epoll FIRST
+    if (epoll_fd_ >= 0) {
+        epoll_event event; // Dummy event is fine for EPOLL_CTL_DEL
+        if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, &event) < 0) {
+            std::cerr << "Failed to remove fd " << fd << " from epoll: " << strerror(errno) << std::endl;
+            // It's possible the fd was already removed or is invalid, so continue.
+        }
+    }
+
+    // 2. Remove from map and then explicitly close the connection (which closes the socket)
     std::unique_ptr<Net::Connection> conn_to_close;
     {
         std::lock_guard<std::mutex> lock(connections_mutex_);
@@ -419,17 +429,12 @@ void Server::close_connection(int fd) {
     }
 
     if (conn_to_close) {
-        conn_to_close->close_connection(); // Ensure socket is closed
+        // The connection object will now be destructed as conn_to_close goes out of scope.
+        // Its destructor will call Net::Connection::close_connection(), which closes the socket.
+        // This ensures the socket is closed after being removed from epoll.
+        conn_to_close->close_connection(); 
     } else {
-        std::cerr << "Warning: Attempted to close non-existent connection FD " << fd << std::endl;
-    }
-
-    // Remove from epoll
-    if (epoll_fd_ >= 0) {
-        epoll_event event; // Dummy event is fine for EPOLL_CTL_DEL
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, &event) < 0) {
-            std::cerr << "Failed to remove fd " << fd << " from epoll: " << strerror(errno) << std::endl;
-        }
+        std::cerr << "Warning: Attempted to close non-existent connection FD " << fd << " (already removed from map?)." << std::endl;
     }
 }
 
