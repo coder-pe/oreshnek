@@ -2,7 +2,6 @@
 #include "oreshnek/Oreshnek.h" // Include the convenience header
 #include "oreshnek/platform/DatabaseManager.h" // Include your DatabaseManager
 #include "oreshnek/platform/SecurityUtils.h"   // Include your SecurityUtils
-// #include "oreshnek/platform/Models.h" // Assuming this holds User, Video, etc. if not in DatabaseManager.h
 
 #include <iostream>
 #include <signal.h>
@@ -21,6 +20,18 @@ void signal_handler(int signal) {
         std::cout << "\nReceived signal " << signal << ", shutting down..." << std::endl;
         g_server->stop();
     }
+}
+
+// Utility to read file content into a string
+std::string read_file_content(const std::string& file_path) {
+    std::ifstream file(file_path, std::ios::in | std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Could not open file: " << file_path << std::endl;
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
 }
 
 // Utility to parse multipart/form-data (simplified, needs robust implementation)
@@ -113,21 +124,21 @@ std::unordered_map<std::string, std::string> parse_multipart_form_data(const std
 
 // URL Decode utility (from your platform_video_streaming.txt)
 std::string url_decode(const std::string& str) {
-    std::string decoded; // [cite: 174]
+    std::string decoded; //
     for(size_t i = 0; i < str.length(); ++i) {
         if(str[i] == '%' && i + 2 < str.length()) {
-            int hex_value; // [cite: 175]
+            int hex_value; //
             std::istringstream hex_stream(str.substr(i + 1, 2));
             if(hex_stream >> std::hex >> hex_value) {
-                decoded += static_cast<char>(hex_value); // [cite: 176]
+                decoded += static_cast<char>(hex_value); //
                 i += 2;
             } else {
-                decoded += str[i]; // [cite: 177]
+                decoded += str[i]; //
             }
         } else if(str[i] == '+') {
-            decoded += ' '; // [cite: 178]
+            decoded += ' '; //
         } else {
-            decoded += str[i]; // [cite: 179]
+            decoded += str[i]; //
         }
     }
     return decoded;
@@ -137,13 +148,13 @@ std::string url_decode(const std::string& str) {
 std::unordered_map<std::string, std::string> parse_form_urlencoded(const std::string_view& data) {
     std::unordered_map<std::string, std::string> params;
     std::string temp_data(data); // Convert string_view to string for stringstream
-    std::istringstream stream(temp_data); // [cite: 171]
+    std::istringstream stream(temp_data); //
     std::string pair;
     
-    while(std::getline(stream, pair, '&')) { // [cite: 172]
+    while(std::getline(stream, pair, '&')) { //
         size_t eq_pos = pair.find('=');
         if(eq_pos != std::string::npos) {
-            std::string key = url_decode(pair.substr(0, eq_pos)); // [cite: 173]
+            std::string key = url_decode(pair.substr(0, eq_pos)); //
             std::string value = url_decode(pair.substr(eq_pos + 1));
             params[key] = value;
         }
@@ -155,24 +166,24 @@ std::unordered_map<std::string, std::string> parse_form_urlencoded(const std::st
 int main() {
     try {
         // Initialize ServerConfig
-        // You can load this from a file later (e.g., JSON, TOML) [cite: 55]
+        // You can load this from a file later (e.g., JSON, TOML)
         g_server_config.port = 8080;
-        g_server_config.jwt_secret = "my-super-secret-jwt-key-for-oreshnek-platform-tutorial-streaming"; // [cite: 63]
+        g_server_config.jwt_secret = "my-super-secret-jwt-key-for-oreshnek-platform-tutorial-streaming"; //
         g_server_config.upload_dir = "./uploads/";
         g_server_config.static_dir = "./static/";
         g_server_config.db_path = "./database.db";
 
         // Create necessary directories
-        std::filesystem::create_directories(g_server_config.upload_dir); // [cite: 183]
-        std::filesystem::create_directories(g_server_config.static_dir); // [cite: 183]
+        std::filesystem::create_directories(g_server_config.upload_dir); //
+        std::filesystem::create_directories(g_server_config.static_dir); //
 
 
         // Create DatabaseManager instance
-        Oreshnek::Platform::DatabaseManager db_manager(g_server_config.db_path); // [cite: 182]
+        Oreshnek::Platform::DatabaseManager db_manager(g_server_config.db_path); //
         g_db_manager = &db_manager; // Set global pointer
 
         // Create server instance
-        Oreshnek::Server::Server server(g_server_config.thread_pool_size); // [cite: 62]
+        Oreshnek::Server::Server server(g_server_config.thread_pool_size); //
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers
@@ -181,198 +192,53 @@ int main() {
 
         // --- Define API routes for the Video Streaming Platform ---
 
-        // Serve static files (e.g., HTML, CSS, JS) [cite: 206]
+        // Serve static files (e.g., HTML, CSS, JS)
         server.get("/static/:file_path", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
             std::optional<std::string_view> file_path_opt = req.param("file_path");
             if (!file_path_opt) {
+                std::cerr << "DEBUG: Missing file path for static request.\n";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).text("Missing file path");
                 return;
             }
-            std::string file_path = g_server_config.static_dir + std::string(*file_path_opt);
+            std::string relative_path = std::string(*file_path_opt);
+            std::string file_path = g_server_config.static_dir + relative_path;
+            std::cerr << "DEBUG: Request for static file: " << file_path << "\n";
 
-            if (!std::filesystem::exists(file_path) || std::filesystem::is_directory(file_path)) {
-                res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).text("File not found"); // [cite: 375]
+            if (!std::filesystem::exists(file_path)) {
+                std::cerr << "DEBUG: Static file not found: " << file_path << "\n";
+                res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).text("File not found");
+                return;
+            }
+            if (std::filesystem::is_directory(file_path)) {
+                std::cerr << "DEBUG: Static file is a directory: " << file_path << "\n";
+                res.status(Oreshnek::Http::HttpStatus::FORBIDDEN).text("Cannot serve directory"); // Or NOT_FOUND
                 return;
             }
 
             std::string content_type = "application/octet-stream";
-            if (file_path.ends_with(".css")) content_type = "text/css";
-            else if (file_path.ends_with(".js")) content_type = "application/javascript";
-            else if (file_path.ends_with(".png")) content_type = "image/png"; // [cite: 377]
-            else if (file_path.ends_with(".jpg") || file_path.ends_with(".jpeg")) content_type = "image/jpeg"; // [cite: 378]
-            else if (file_path.ends_with(".html") || file_path.ends_with(".htm")) content_type = "text/html";
+            if (relative_path.ends_with(".css")) content_type = "text/css";
+            else if (relative_path.ends_with(".js")) content_type = "application/javascript";
+            else if (relative_path.ends_with(".png")) content_type = "image/png";
+            else if (relative_path.ends_with(".jpg") || relative_path.ends_with(".jpeg")) content_type = "image/jpeg";
+            else if (relative_path.ends_with(".html") || relative_path.ends_with(".htm")) content_type = "text/html";
 
-            res.status(Oreshnek::Http::HttpStatus::OK).file(file_path, content_type); // Use new file() method
+            std::cerr << "DEBUG: Serving static file: " << file_path << " with Content-Type: " << content_type << "\n";
+            res.status(Oreshnek::Http::HttpStatus::OK).file(file_path, content_type); // This sets the response to be a file
         });
 
-        // Serve home page [cite: 200]
+        // Serve home page
         server.get("/", [](const Oreshnek::HttpRequest& /*req*/, Oreshnek::HttpResponse& res) {
-            std::string html_content = R"ORES_HTML_DELIM(<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Tutorial Platform</title>
-    <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-    <header>
-        <div class="container">
-            <nav>
-                <div class="logo">🎓 Video Tutorials</div>
-                <ul class="nav-links">
-                    <li><a href="/">Inicio</a></li>
-                    <li><a href="#videos">Videos</a></li>
-                    <li><a href="#" onclick="showAuth()">Login</a></li>
-                    <li><a href="#" onclick="showUpload()">Subir Video</a></li>
-                </ul>
-            </nav>
-        </div>
-    </header>
-
-    <section class="hero">
-        <div class="container">
-            <h1>Aprende Programación</h1>
-            <p>La mejor plataforma de video tutoriales de programación en español</p>
-            <a href="#videos" class="btn">Ver Videos</a>
-        </div>
-    </section>
-
-    <section class="features">
-        <div class="container">
-            <div class="features-grid">
-                <div class="feature-card">
-                    <h3>Contenido de Calidad</h3>
-                    <p>Tutoriales creados por expertos en programación con años de experiencia</p>
-                </div>
-                <div class="feature-card">
-                    <h3>Tecnologías Modernas</h3>
-                    <p>Aprende las últimas tecnologías y frameworks más demandados</p>
-                </div>
-                <div class="feature-card">
-                    <h3>Comunidad Activa</h3>
-                    <p>Interactúa con otros estudiantes y instructores en los comentarios</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <div id="auth-modal" class="hidden">
-        <div class="container">
-            <div class="auth-section">
-                <h2>Iniciar Sesión / Registrarse</h2>
-                <div style="display: flex; gap: 2rem;">
-                    <div style="flex: 1;">
-                        <h3>Iniciar Sesión</h3>
-                        <form id="login-form">
-                            <div class="form-group">
-                                <label>Usuario:</label>
-                                <input type="text" id="login-username" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Contraseña:</label>
-                                <input type="password" id="login-password" required>
-                            </div>
-                            <button type="submit" class="btn">Iniciar Sesión</button>
-                        </form>
-                    </div>
-                    <div style="flex: 1;">
-                        <h3>Registrarse</h3>
-                        <form id="register-form">
-                            <div class="form-group">
-                                <label>Usuario:</label>
-                                <input type="text" id="register-username" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Email:</label>
-                                <input type="email" id="register-email" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Contraseña:</label>
-                                <input type="password" id="register-password" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Rol:</label>
-                                <select id="register-role">
-                                    <option value="student">Estudiante</option>
-                                    <option value="instructor">Instructor</option>
-                                </select>
-                            </div>
-                            <button type="submit" class="btn">Registrarse</button>
-                        </form>
-                    </div>
-                </div>
-                <button onclick="hideAuth()" class="btn" style="background: #95a5a6; margin-top: 1rem;">Cerrar</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="upload-modal" class="hidden">
-        <div class="container">
-            <div class="auth-section">
-                <h2>Subir Video Tutorial</h2>
-                <form id="upload-form" enctype="multipart/form-data">
-                    <div class="form-group">
-                        <label>Título:</label>
-                        <input type="text" id="video-title" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Descripción:</label>
-                        <textarea id="video-description" rows="4"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label>Categoría:</label>
-                        <select id="video-category">
-                            <option value="cpp">C++</option>
-                            <option value="python">Python</option>
-                            <option value="javascript">JavaScript</option>
-                            <option value="java">Java</option>
-                            <option value="web">Desarrollo Web</option>
-                            <option value="mobile">Desarrollo Móvil</option>
-                            <option value="algorithms">Algoritmos</option>
-                            <option value="databases">Bases de Datos</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Tags (separados por comas):</label>
-                        <input type="text" id="video-tags" placeholder="tutorial, principiante, programación">
-                    </div>
-                    <div class="upload-area" onclick="document.getElementById('video-file').click()">
-                        <p>Haz clic para seleccionar un archivo de video</p>
-                        <p>Formatos soportados: MP4, WebM, AVI (máx. 500MB)</p>
-                        <input type="file" id="video-file" accept="video/*" style="display:none;" onchange="updateFileName(this)">
-                    </div>
-                    <div id="file-name"></div>
-                    <button type="submit" class="btn">Subir Video</button>
-                </form>
-                <button onclick="hideUpload()" class="btn" style="background: #95a5a6; margin-top: 1rem;">Cerrar</button>
-            </div>
-        </div>
-    </div>
-
-    <section id="videos">
-        <div class="container">
-            <h2 style="text-align: center; margin-bottom: 2rem;">Videos Recientes</h2>
-            <div id="video-list" class="video-grid">
-                </div>
-        </div>
-    </section>
-
-    <footer>
-        <div class="container">
-            <p>&copy; 2025 Video Tutorial Platform. Hecho con C++17 y amor por la programación.</p>
-        </div>
-    </footer>
-
-    <script src="/static/script.js"></script>
-</body>
-</html>)ORES_HTML_DELIM";
+            std::string html_content = read_file_content(g_server_config.static_dir + "index.html");
+            if (html_content.empty()) {
+                res.status(Oreshnek::Http::HttpStatus::INTERNAL_SERVER_ERROR).text("Could not load index.html");
+                return;
+            }
             res.status(Oreshnek::Http::HttpStatus::OK).html(html_content);
         });
 
-        // Register User [cite: 204]
+        // Register User
         server.post("/api/register", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
-            res.header("Content-Type", "application/json"); // [cite: 325]
+            res.header("Content-Type", "application/json"); //
             
             if (req.body().empty()) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
@@ -389,7 +255,7 @@ int main() {
             auto password_it = form_data.find("password");
             auto role_it = form_data.find("role");
 
-            if (username_it == form_data.end() || email_it == form_data.end() || password_it == form_data.end()) { // [cite: 326]
+            if (username_it == form_data.end() || email_it == form_data.end() || password_it == form_data.end()) { //
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
                 error_json["message"] = "Missing required fields";
@@ -397,7 +263,7 @@ int main() {
                 return;
             }
 
-            // Basic validation (can be enhanced significantly) [cite: 5]
+            // Basic validation (can be enhanced significantly)
             if (username_it->second.empty() || email_it->second.empty() || password_it->second.empty()) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -405,15 +271,15 @@ int main() {
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }
-            // Email format and uniqueness validation [cite: 5]
-            // Password strength validation [cite: 5]
+            // Email format and uniqueness validation
+            // Password strength validation
 
-            Oreshnek::Platform::User new_user; // [cite: 332]
+            Oreshnek::Platform::User new_user; //
             new_user.username = username_it->second;
             new_user.email = email_it->second;
             new_user.role = (role_it != form_data.end()) ? role_it->second : "student";
 
-            // Check if user already exists [cite: 329]
+            // Check if user already exists
             if (g_db_manager->getUserByUsername(new_user.username).id != 0) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -422,20 +288,20 @@ int main() {
                 return;
             }
 
-            std::string salt = Oreshnek::Platform::SecurityUtils::generateSalt(); // [cite: 333]
+            std::string salt = Oreshnek::Platform::SecurityUtils::generateSalt(); //
             new_user.password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt);
 
             bool success = g_db_manager->createUser(new_user);
 
             Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
             response_json["success"] = success;
-            response_json["message"] = success ? "User registered successfully" : "Error creating user"; // [cite: 334]
-            res.json(response_json); // [cite: 335]
+            response_json["message"] = success ? "User registered successfully" : "Error creating user"; //
+            res.json(response_json); //
         });
 
-        // Login User [cite: 203]
+        // Login User
         server.post("/api/login", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
-            res.header("Content-Type", "application/json"); // [cite: 313]
+            res.header("Content-Type", "application/json"); //
 
             if (req.body().empty()) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
@@ -457,7 +323,7 @@ int main() {
                 return;
             }
 
-            Oreshnek::Platform::User user = g_db_manager->getUserByUsername(username_it->second); // [cite: 317]
+            Oreshnek::Platform::User user = g_db_manager->getUserByUsername(username_it->second); //
             if (user.id == 0) { // User not found
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -467,8 +333,8 @@ int main() {
             }
 
             // In a real implementation, store salt with user and retrieve it here.
-            std::string salt = "default_salt"; // [cite: 320]
-            std::string password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt); // [cite: 321]
+            std::string salt = "default_salt"; //
+            std::string password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt); //
 
             if (password_hash != user.password_hash) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
@@ -478,7 +344,7 @@ int main() {
                 return;
             }
 
-            std::string token = Oreshnek::Platform::SecurityUtils::generateJWT(user.id, user.username, g_server_config.jwt_secret); // [cite: 323]
+            std::string token = Oreshnek::Platform::SecurityUtils::generateJWT(user.id, user.username, g_server_config.jwt_secret); //
 
             Oreshnek::JsonValue success_response = Oreshnek::JsonValue::object();
             success_response["success"] = true;
@@ -489,14 +355,14 @@ int main() {
             user_json["role"] = Oreshnek::JsonValue(user.role);
             success_response["user"] = user_json;
             
-            res.json(success_response); // [cite: 324]
+            res.json(success_response); //
         });
 
-        // Upload Video [cite: 202]
+        // Upload Video
         server.post("/api/upload", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
-            res.header("Content-Type", "application/json"); // [cite: 336]
+            res.header("Content-Type", "application/json"); //
 
-            auto auth_header = req.header("Authorization"); // [cite: 337]
+            auto auth_header = req.header("Authorization"); //
             if (!auth_header) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -505,9 +371,9 @@ int main() {
                 return;
             }
 
-            std::string token = std::string(*auth_header); // [cite: 339]
-            if (token.length() > 7 && token.substr(0, 7) == "Bearer ") { // [cite: 340]
-                token = token.substr(7); // [cite: 341]
+            std::string token = std::string(*auth_header); //
+            if (token.length() > 7 && token.substr(0, 7) == "Bearer ") { //
+                token = token.substr(7); //
             } else {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -516,7 +382,7 @@ int main() {
                 return;
             }
             
-            if (!Oreshnek::Platform::SecurityUtils::validateJWT(token, g_server_config.jwt_secret)) { // [cite: 342]
+            if (!Oreshnek::Platform::SecurityUtils::validateJWT(token, g_server_config.jwt_secret)) { //
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid token";
@@ -568,7 +434,7 @@ int main() {
             new_video.category = category;
             new_video.filename = filename_in_uploads;
             new_video.user_id = user_id;
-            new_video.duration = "00:00"; // Placeholder, processing would set this [cite: 16]
+            new_video.duration = "00:00"; // Placeholder, processing would set this
 
             std::stringstream ss(tags_str);
             std::string tag;
@@ -579,14 +445,14 @@ int main() {
             bool success = g_db_manager->createVideo(new_video);
 
             Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
-            response_json["success"] = success; // [cite: 344]
+            response_json["success"] = success; //
             response_json["message"] = success ? "Video uploaded successfully" : "Error uploading video";
-            res.json(response_json); // [cite: 345]
+            res.json(response_json); //
         });
 
-        // Get Video List [cite: 201]
+        // Get Video List
         server.get("/api/videos", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
-            res.header("Content-Type", "application/json"); // [cite: 305]
+            res.header("Content-Type", "application/json"); //
 
             int limit = 20;
             int offset = 0;
@@ -594,7 +460,7 @@ int main() {
 
             auto limit_opt = req.query("limit");
             if (limit_opt) {
-                try { limit = std::stoi(std::string(*limit_opt)); } catch (...) {} // [cite: 306]
+                try { limit = std::stoi(std::string(*limit_opt)); } catch (...) {} //
             }
             auto offset_opt = req.query("offset");
             if (offset_opt) {
@@ -602,15 +468,15 @@ int main() {
             }
             auto category_opt = req.query("category");
             if (category_opt) {
-                category = std::string(*category_opt); // [cite: 307]
+                category = std::string(*category_opt); //
             }
             
-            std::vector<Oreshnek::Platform::Video> videos = g_db_manager->getVideos(limit, offset, category); // [cite: 308]
+            std::vector<Oreshnek::Platform::Video> videos = g_db_manager->getVideos(limit, offset, category); //
             Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
             response_json["success"] = true;
             response_json["videos"] = Oreshnek::JsonValue::array();
             
-            for(const auto& video : videos) { // [cite: 309]
+            for(const auto& video : videos) { //
                 Oreshnek::JsonValue video_json = Oreshnek::JsonValue::object();
                 video_json["id"] = video.id;
                 video_json["title"] = Oreshnek::JsonValue(video.title);
@@ -621,150 +487,69 @@ int main() {
                     tags_array.get_array().push_back(Oreshnek::JsonValue(tag));
                 }
                 video_json["tags"] = tags_array;
-                video_json["views"] = video.views; // [cite: 310]
+                video_json["views"] = video.views; //
                 video_json["likes"] = video.likes;
                 video_json["created_at"] = Oreshnek::JsonValue(video.created_at);
                 video_json["duration"] = Oreshnek::JsonValue(video.duration);
-                response_json["videos"].get_array().push_back(video_json); // [cite: 311]
+                response_json["videos"].get_array().push_back(video_json); //
             }
             
-            res.json(response_json); // [cite: 312]
+            res.json(response_json); //
         });
 
-        // Serve a specific video file (e.g., for direct playback) [cite: 205]
+        // Serve a specific video file (e.g., for direct playback)
         server.get("/video/:filename", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
             std::optional<std::string_view> filename_opt = req.param("filename");
             if (!filename_opt) {
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).text("Missing video filename");
                 return;
             }
-            std::string video_path = g_server_config.upload_dir + std::string(*filename_opt); // [cite: 348]
+            std::string video_path = g_server_config.upload_dir + std::string(*filename_opt); //
 
             if (!std::filesystem::exists(video_path) || std::filesystem::is_directory(video_path)) {
-                res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).text("Video not found"); // [cite: 349]
+                res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).text("Video not found"); //
                 return;
             }
             
-            res.status(Oreshnek::Http::HttpStatus::OK).file(video_path, "video/mp4"); // [cite: 352]
-            res.header("Accept-Ranges", "bytes"); // Crucial for video streaming [cite: 352]
+            res.status(Oreshnek::Http::HttpStatus::OK).file(video_path, "video/mp4"); //
+            res.header("Accept-Ranges", "bytes"); // Crucial for video streaming
             // Note: Range request handling needs to be implemented in Connection::write_data
         });
 
-        // Serve video player page [cite: 207]
+        // Serve video player page
         server.get("/watch", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
-            res.header("Content-Type", "text/html; charset=utf-8"); // [cite: 353]
+            std::string html_content = read_file_content(g_server_config.static_dir + "watch.html");
+            if (html_content.empty()) {
+                res.status(Oreshnek::Http::HttpStatus::INTERNAL_SERVER_ERROR).text("Could not load watch.html");
+                return;
+            }
+
+            res.header("Content-Type", "text/html; charset=utf-8"); //
 
             std::optional<std::string_view> id_opt = req.query("id");
             if (!id_opt) {
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
-                   .html("<h1>400 - Bad Request: Missing video ID</h1>"); // [cite: 354]
+                   .html("<h1>400 - Bad Request: Missing video ID</h1>"); //
                 return;
             }
 
             int video_id = 0;
             try {
-                video_id = std::stoi(std::string(*id_opt)); // [cite: 356]
+                video_id = std::stoi(std::string(*id_opt)); //
             } catch (const std::exception& e) {
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST)
                    .html("<h1>400 - Bad Request: Invalid video ID format</h1>");
                 return;
             }
             
-            // Increment view count [cite: 357]
+            // Increment view count
             g_db_manager->incrementViews(video_id);
 
             // Fetch video details to populate the player page
             // (You'll need a get_video_by_id in DatabaseManager)
             // For now, let's just use the ID in the HTML
-            std::string video_player_html = R"ORES_HTML_DELIM(<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reproducir Video - Video Tutorial Platform</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <style>
-        .video-player video { width: 100%; height: auto; } /* [cite: 358] */
-    </style>
-</head>
-<body>
-    <div class="container">
-        <a href="/" class="back-link">← Volver al inicio</a>
-        
-        <div class="video-player">
-            <video controls>
-                <source src="/video/VIDEO_FILENAME_PLACEHOLDER" type="video/mp4">
-                Tu navegador no soporta la reproducción de videos.
-            </video>
-        </div>
-        
-        <div class="video-info">
-            <h1 class="video-title" id="video-title">Cargando...</h1>
-            <div class="video-meta" id="video-meta">
-                <span id="views">0</span> visualizaciones • 
-                <span id="likes">0</span> likes • 
-                <span id="date">Fecha</span>
-            </div>
-            <div class="video-description" id="video-description">
-                Cargando descripción...
-            </div>
-        </div>
-        
-        <div class="comments-section">
-            <h3>Comentarios</h3>
-            <div class="comment-form">
-                <textarea placeholder="Escribe un comentario..." rows="3"></textarea>
-                <br><br>
-                <button class="btn">Comentar</button>
-            </div>
-            <div id="comments-list">
-                </div>
-        </div>
-    </div>
-
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            loadVideoInfo();
-        });
-
-        async function loadVideoInfo() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const videoId = urlParams.get('id');
-            if (!videoId) {
-                console.error('Video ID not found in URL.');
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/video_details/${videoId}`);
-                const result = await response.json();
-                
-                if(result.success && result.video) {
-                    const video = result.video;
-                    document.getElementById('video-title').textContent = video.title;
-                    document.getElementById('views').textContent = video.views;
-                    document.getElementById('likes').textContent = video.likes;
-                    document.getElementById('date').textContent = video.created_at;
-                    document.getElementById('video-description').textContent = video.description;
-                    document.title = video.title + ' - Video Tutorial Platform';
-
-                    // Update video source
-                    const videoElement = document.querySelector('.video-player video');
-                    if (videoElement) {
-                        videoElement.querySelector('source').src = `/video/${video.filename}`;
-                        videoElement.load(); // Reload video element
-                    }
-                } else {
-                    console.error('Error loading video info:', result.message);
-                }
-            } catch(error) {
-                console.error('Error loading video info:', error);
-            }
-        }
-    </script>
-</body>
-</html>)ORES_HTML_DELIM";
-            res.status(Oreshnek::Http::HttpStatus::OK).html(video_player_html);
+            
+            res.status(Oreshnek::Http::HttpStatus::OK).html(html_content);
         });
 
         // API to get video details (for the player page to fetch dynamically)

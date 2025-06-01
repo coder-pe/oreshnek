@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reproducir Video - Video Tutorial Platform</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .video-player video { width: 100%; height: auto; } /* */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Volver al inicio</a>
+        
+        <div class="video-player">
+            <video controls>
+                <source src="/video/VIDEO_FILENAME_PLACEHOLDER" type="video/mp4">
+                Tu navegador no soporta la reproducción de videos.
+            </video>
+        </div>
+        
+        <div class="video-info">
+            <h1 class="video-title" id="video-title">Cargando...</h1>
+            <div class="video-meta" id="video-meta">
+                <span id="views">0</span> visualizaciones • 
+                <span id="likes">0</span> likes • 
+                <span id="date">Fecha</span>
+            </div>
+            <div class="video-description" id="video-description">
+                Cargando descripción...
+            </div>
+        </div>
+        
+        <div class="comments-section">
+            <h3>Comentarios</h3>
+            <div class="comment-form">
+                <textarea placeholder="Escribe un comentario..." rows="3"></textarea>
+                <br><br>
+                <button class="btn">Comentar</button>
+            </div>
+            <div id="comments-list">
+                </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            loadVideoInfo();
+        });
+
+        async function loadVideoInfo() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const videoId = urlParams.get('id');
+            if (!videoId) {
+                console.error('Video ID not found in URL.');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/video_details/${videoId}`);
+                const result = await response.json();
+                
+                if(result.success && result.video) {
+                    const video = result.video;
+                    document.getElementById('video-title').textContent = video.title;
+                    document.getElementById('views').textContent = video.views;
+                    document.getElementById('likes').textContent = video.likes;
+                    document.getElementById('date').textContent = video.created_at;
+                    document.getElementById('video-description').textContent = video.description;
+                    document.title = video.title + ' - Video Tutorial Platform';
+
+                    // Update video source
+                    const videoElement = document.querySelector('.video-player video');
+                    if (videoElement) {
+                        videoElement.querySelector('source').src = `/video/${video.filename}`;
+                        videoElement.load(); // Reload video element
+                    }
+                } else {
+                    console.error('Error loading video info:', result.message);
+                }
+            } catch(error) {
+                console.error('Error loading video info:', error);
+            }
+        }
+    </script>
+</body>
+</html>

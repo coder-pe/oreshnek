@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Tutorial Platform</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <nav>
+                <div class="logo">🎓 Video Tutorials</div>
+                <ul class="nav-links">
+                    <li><a href="/">Inicio</a></li>
+                    <li><a href="#videos">Videos</a></li>
+                    <li><a href="#" onclick="showAuth()">Login</a></li>
+                    <li><a href="#" onclick="showUpload()">Subir Video</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <h1>Aprende Programación</h1>
+            <p>La mejor plataforma de video tutoriales de programación en español</p>
+            <a href="#videos" class="btn">Ver Videos</a>
+        </div>
+    </section>
+
+    <section class="features">
+        <div class="container">
+            <div class="features-grid">
+                <div class="feature-card">
+                    <h3>Contenido de Calidad</h3>
+                    <p>Tutoriales creados por expertos en programación con años de experiencia</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Tecnologías Modernas</h3>
+                    <p>Aprende las últimas tecnologías y frameworks más demandados</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Comunidad Activa</h3>
+                    <p>Interactúa con otros estudiantes y instructores en los comentarios</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div id="auth-modal" class="hidden">
+        <div class="container">
+            <div class="auth-section">
+                <h2>Iniciar Sesión / Registrarse</h2>
+                <div style="display: flex; gap: 2rem;">
+                    <div style="flex: 1;">
+                        <h3>Iniciar Sesión</h3>
+                        <form id="login-form">
+                            <div class="form-group">
+                                <label>Usuario:</label>
+                                <input type="text" id="login-username" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Contraseña:</label>
+                                <input type="password" id="login-password" required>
+                            </div>
+                            <button type="submit" class="btn">Iniciar Sesión</button>
+                        </form>
+                    </div>
+                    <div style="flex: 1;">
+                        <h3>Registrarse</h3>
+                        <form id="register-form">
+                            <div class="form-group">
+                                <label>Usuario:</label>
+                                <input type="text" id="register-username" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Email:</label>
+                                <input type="email" id="register-email" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Contraseña:</label>
+                                <input type="password" id="register-password" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Rol:</label>
+                                <select id="register-role">
+                                    <option value="student">Estudiante</option>
+                                    <option value="instructor">Instructor</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn">Registrarse</button>
+                        </form>
+                    </div>
+                </div>
+                <button onclick="hideAuth()" class="btn" style="background: #95a5a6; margin-top: 1rem;">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="upload-modal" class="hidden">
+        <div class="container">
+            <div class="auth-section">
+                <h2>Subir Video Tutorial</h2>
+                <form id="upload-form" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label>Título:</label>
+                        <input type="text" id="video-title" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Descripción:</label>
+                        <textarea id="video-description" rows="4"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Categoría:</label>
+                        <select id="video-category">
+                            <option value="cpp">C++</option>
+                            <option value="python">Python</option>
+                            <option value="javascript">JavaScript</option>
+                            <option value="java">Java</option>
+                            <option value="web">Desarrollo Web</option>
+                            <option value="mobile">Desarrollo Móvil</option>
+                            <option value="algorithms">Algoritmos</option>
+                            <option value="databases">Bases de Datos</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Tags (separados por comas):</label>
+                        <input type="text" id="video-tags" placeholder="tutorial, principiante, programación">
+                    </div>
+                    <div class="upload-area" onclick="document.getElementById('video-file').click()">
+                        <p>Haz clic para seleccionar un archivo de video</p>
+                        <p>Formatos soportados: MP4, WebM, AVI (máx. 500MB)</p>
+                        <input type="file" id="video-file" accept="video/*" style="display:none;" onchange="updateFileName(this)">
+                    </div>
+                    <div id="file-name"></div>
+                    <button type="submit" class="btn">Subir Video</button>
+                </form>
+                <button onclick="hideUpload()" class="btn" style="background: #95a5a6; margin-top: 1rem;">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <section id="videos">
+        <div class="container">
+            <h2 style="text-align: center; margin-bottom: 2rem;">Videos Recientes</h2>
+            <div id="video-list" class="video-grid">
+                </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 Video Tutorial Platform. Hecho con C++17 y amor por la programación.</p>
+        </div>
+    </footer>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
