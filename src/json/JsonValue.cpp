@@ -185,9 +185,8 @@ void serialize_to_string_recursive(std::ostream& os, const JsonValue& val, int i
     } else if (val.is_array()) {
         os << "[";
         if (val.get_array().empty()) {
-            os << "]";
-            // No break here, continue to add newline/indent if indent_width > 0 even for empty array
-            // This is to maintain consistent formatting for empty array vs non-empty array
+            // Corrected: Do not print ']' here. It will be printed once at the end of the block.
+            // This prevents the extra ']' for empty arrays.
         } else {
             if (indent_width > 0) os << "\n";
             for (size_t i = 0; i < val.get_array().size(); ++i) {
@@ -200,7 +199,7 @@ void serialize_to_string_recursive(std::ostream& os, const JsonValue& val, int i
             }
             if (indent_width > 0) os << indent_str;
         }
-        os << "]";
+        os << "]"; // This is the single, correct closing bracket for the array.
     } else if (val.is_object()) {
         os << "{";
         if (val.get_object().empty()) {
