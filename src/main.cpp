@@ -288,7 +288,7 @@ int main() {
                 return;
             }
 
-            std::string salt = Oreshnek::Platform::SecurityUtils::generateSalt(); //
+            std::string salt = "default_salt"; // Replace with dynamically generated salt in a real app
             new_user.password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt);
 
             bool success = g_db_manager->createUser(new_user);
@@ -494,6 +494,10 @@ int main() {
                 response_json["videos"].get_array().push_back(video_json); //
             }
             
+            // --- DEBUG PRINT: Print the generated JSON to stderr for inspection ---
+            std::cerr << "DEBUG: Sending /api/videos response: " << response_json.to_string() << std::endl;
+            // --- END DEBUG PRINT ---
+
             res.json(response_json); //
         });
 
