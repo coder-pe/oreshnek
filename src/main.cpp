@@ -411,6 +411,15 @@ int main() {
                 return;
             }
 
+            // --- DEBUG PRINT: Print raw request body for upload ---
+            std::cerr << "DEBUG: /api/upload raw body size: " << req.body().length() << " bytes.\n";
+            if (req.body().length() > 0) {
+                std::cerr << "DEBUG: /api/upload raw body (first 512 bytes): " << req.body().substr(0, std::min(req.body().length(), (size_t)512)) << "...\n";
+            } else {
+                std::cerr << "DEBUG: /api/upload raw body is empty.\n";
+            }
+            // --- END DEBUG PRINT ---
+
             std::unordered_map<std::string, std::string> form_data = parse_multipart_form_data(req.body(), *content_type_header_opt);
 
             // Access fields
@@ -423,7 +432,7 @@ int main() {
             if (title.empty() || filename_in_uploads.empty()) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
-                error_json["message"] = "Missing title or video file";
+                error_json["message"] = "Missing title or video file (from parsed form data).";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
                 return;
             }

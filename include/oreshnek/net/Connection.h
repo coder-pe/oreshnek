@@ -17,7 +17,8 @@ namespace Net {
 
 class Connection {
 public:
-    static constexpr size_t READ_BUFFER_SIZE = 8192; // Common buffer size for network I/O
+    // Changed buffer size from 8KB to 1MB to handle larger requests/uploads
+    static constexpr size_t READ_BUFFER_SIZE = 1024 * 1024; // 1MB
     static constexpr size_t WRITE_BUFFER_CHUNK_SIZE = 4096; // Chunk size for sending file data
 
     int socket_fd_;
