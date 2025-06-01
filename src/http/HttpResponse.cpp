@@ -71,6 +71,7 @@ HttpResponse& HttpResponse::html(const std::string& content) {
     return body(content).header("Content-Type", "text/html");
 }
 
+/* REMOVED
 const std::string& HttpResponse::get_body() const {
     if (is_file_response_) {
         // This is a potentially expensive operation if the file is large
@@ -92,6 +93,7 @@ const std::string& HttpResponse::get_body() const {
     }
     return std::get<std::string>(body_content_);
 }
+*/
 
 std::string HttpResponse::build_headers_string() const {
     std::ostringstream oss;

@@ -248,44 +248,43 @@ void Server::handle_new_connection() {
 }
 
 void Server::handle_client_data(int fd) {
-    // Acquire unique_ptr to connection from map to process it.
-    std::unique_ptr<Net::Connection> conn;
+    Net::Connection* conn_ptr = nullptr;
     {
         std::lock_guard<std::mutex> lock(connections_mutex_);
         auto it = connections_.find(fd);
-        if (it != connections_.end()) {
-            conn = std::move(it->second); // Take ownership from map
-            connections_.erase(it); // Remove from map temporarily
-        } else {
+        if (it == connections_.end()) {
             std::cerr << "Error: handle_client_data called for non-existent FD " << fd << std::endl;
             return;
         }
+        conn_ptr = it->second.get(); // Get raw pointer, ownership remains in map
     }
 
-    if (!conn->is_open()) {
+    if (!conn_ptr->is_open()) {
         std::cerr << "Warning: Received data for already closed connection " << fd << std::endl;
+        close_connection(fd); // Ensure it's fully closed and removed from map
         return;
     }
 
-    ssize_t bytes_read = conn->read_data();
+    ssize_t bytes_read = conn_ptr->read_data();
     if (bytes_read == 0) {
-        // Client closed connection
+        // Client closed connection gracefully
         std::cerr << "Client on fd " << fd << " closed connection gracefully." << std::endl;
-        conn->close_connection(); 
-        return; // conn unique_ptr will be destructed, removing the connection
+        close_connection(fd); 
+        return;
     } else if (bytes_read < 0) {
         // Error reading (excluding EAGAIN/EWOULDBLOCK which return 0)
-        conn->close_connection();
+        close_connection(fd);
         return;
     }
 
     // Attempt to parse requests from the connection's read buffer
-    while (conn->process_read_buffer()) {
+    bool request_parsed_this_call = false;
+    while (conn_ptr->process_read_buffer()) {
         // Full request parsed! Enqueue it to the thread pool for processing
-        Http::HttpRequest request_copy = conn->current_request_; // Create a copy of the request
-        int connection_fd_for_lambda = fd; // Capture fd by value
+        Http::HttpRequest request_copy = conn_ptr->current_request_; // Create a copy of the request
+        request_parsed_this_call = true;
 
-        thread_pool_->enqueue([this, request_copy, connection_fd_for_lambda]() mutable {
+        thread_pool_->enqueue([this, request_copy, fd, conn_ptr]() mutable {
             Http::HttpResponse res; // Create a fresh response for this request
 
             RouteHandler handler;
@@ -307,130 +306,103 @@ void Server::handle_client_data(int fd) {
             }
 
             // After handler, prepare response to be written
-            std::unique_ptr<Net::Connection> current_connection_in_thread;
+            // Set the response content on the connection
+            conn_ptr->set_response_content(res);
+
+            conn_ptr->current_request_ = Http::HttpRequest(); // Clear request for next one
+            conn_ptr->http_parser_.reset(); // Reset parser for next request on same connection
+
+            // Re-arm connection for writing and subsequent reads
+            epoll_event event;
+            event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT; // Request write event
+
+            event.data.fd = fd;
+            
+            // Protect epoll_ctl with connections_mutex_
             {
                 std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
-                auto iter = this->connections_.find(connection_fd_for_lambda);
-                if (iter != this->connections_.end()) {
-                    current_connection_in_thread = std::move(iter->second);
-                    this->connections_.erase(iter);
+                if (epoll_ctl(this->epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+                    std::cerr << "Failed to modify epoll for fd " << fd << " (from thread pool): " << strerror(errno) << std::endl;
+                    this->close_connection(fd);
                 }
-            }
-
-            if (current_connection_in_thread) {
-                // Set the response content on the connection
-                current_connection_in_thread->set_response_content(res);
-
-                current_connection_in_thread->current_request_ = Http::HttpRequest(); // Clear request for next one
-                current_connection_in_thread->http_parser_.reset(); // Reset parser for next request on same connection
-
-                // Re-arm connection for writing and subsequent reads
-                epoll_event event;
-                // Always ask for EPOLLOUT if there's data to write.
-                // EPOLLIN will be re-added by handle_write_ready after all writes are done for this response.
-                event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
-                event.data.fd = connection_fd_for_lambda;
-                
-                // Put connection back into the map before re-arming epoll
-                {
-                    std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
-                    this->connections_[connection_fd_for_lambda] = std::move(current_connection_in_thread);
-                }
-
-                if (epoll_ctl(this->epoll_fd_, EPOLL_CTL_MOD, connection_fd_for_lambda, &event) < 0) {
-                    std::cerr << "Failed to modify epoll for fd " << connection_fd_for_lambda << ": " << strerror(errno) << std::endl;
-                    this->close_connection(connection_fd_for_lambda);
-                }
-            } else {
-                std::cerr << "Error: Connection " << connection_fd_for_lambda << " not found in map after processing by thread pool." << std::endl;
             }
         }); // End of enqueue lambda
     } 
 
-    // If 'conn' is still valid here (wasn't closed due to read error or graceful close),
-    // put it back and re-arm epoll for read events.
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        if (conn) { // conn might be null if it was closed
-             connections_[fd] = std::move(conn);
-             // Re-arm epoll for EPOLLIN only (if no EPOLLOUT is pending yet from previous handling)
-             epoll_event event;
-             event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-             event.data.fd = fd;
-             // If there's already data in write_buffer_ for some reason, also ask for EPOLLOUT
-             if (connections_[fd]->has_data_to_write()) { // Use the new check
-                 event.events |= EPOLLOUT;
-             }
-
-             if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                 std::cerr << "Failed to modify epoll for read on fd " << fd << " after partial read: " << strerror(errno) << std::endl;
-                 close_connection(fd);
-             }
+    // If no full request was parsed in this call, re-arm for EPOLLIN to read more data.
+    // This handles cases where only partial data was received.
+    if (!request_parsed_this_call && conn_ptr->is_open()) {
+        epoll_event event;
+        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
+        event.data.fd = fd;
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+                std::cerr << "Failed to modify epoll for read on fd " << fd << " after partial read: " << strerror(errno) << std::endl;
+                close_connection(fd);
+            }
         }
     }
 }
 
 
 void Server::handle_write_ready(int fd) {
-    std::unique_ptr<Net::Connection> conn;
+    Net::Connection* conn_ptr = nullptr;
     {
         std::lock_guard<std::mutex> lock(connections_mutex_);
         auto it = connections_.find(fd);
-        if (it != connections_.end()) {
-            conn = std::move(it->second);
-            connections_.erase(it);
-        } else {
+        if (it == connections_.end()) {
             std::cerr << "Error: handle_write_ready called for non-existent FD " << fd << std::endl;
             return;
         }
+        conn_ptr = it->second.get(); // Get raw pointer, ownership remains in map
     }
 
-    if (!conn->is_open()) {
+    if (!conn_ptr->is_open()) {
         std::cerr << "Warning: Received write event for already closed connection " << fd << std::endl;
+        close_connection(fd); // Ensure it's fully closed and removed from map
         return;
     }
 
     // Attempt to write data
-    ssize_t bytes_written = conn->write_data();
+    ssize_t bytes_written = conn_ptr->write_data();
 
     if (bytes_written < 0) {
-        conn->close_connection();
+        close_connection(fd);
         return;
     }
 
     // Check if all data for the current response has been sent
-    if (!conn->has_data_to_write()) {
+    if (!conn_ptr->has_data_to_write()) {
         // All data sent. Re-arm for reading or close if not keep-alive.
-        if (conn->keep_alive_) { 
+        if (conn_ptr->keep_alive_) { 
             epoll_event event;
             event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Read more data for next request
             event.data.fd = fd;
-            conn->reset(); // Reset the connection for the next request
+            conn_ptr->reset(); // Reset the connection for the next request
 
-            {
+            { // Protect epoll_ctl with connections_mutex_
                 std::lock_guard<std::mutex> lock(connections_mutex_);
-                connections_[fd] = std::move(conn);
-            }
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                std::cerr << "Failed to modify epoll for read on fd " << fd << ": " << strerror(errno) << std::endl;
-                close_connection(fd);
+                if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+                    std::cerr << "Failed to modify epoll for read on fd " << fd << ": " << strerror(errno) << std::endl;
+                    close_connection(fd);
+                }
             }
         } else {
             // Not keep-alive, close connection
-            conn->close_connection();
+            close_connection(fd);
         }
     } else {
         // Still data to send, re-arm for EPOLLOUT
         epoll_event event;
         event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
         event.data.fd = fd;
-        {
+        { // Protect epoll_ctl with connections_mutex_
             std::lock_guard<std::mutex> lock(connections_mutex_);
-            connections_[fd] = std::move(conn);
-        }
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-            std::cerr << "Failed to modify epoll for EPOLLOUT on fd " << fd << ": " << strerror(errno) << std::endl;
-            close_connection(fd);
+            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+                std::cerr << "Failed to modify epoll for EPOLLOUT on fd " << fd << ": " << strerror(errno) << std::endl;
+                close_connection(fd);
+            }
         }
     }
 }
@@ -441,7 +413,7 @@ void Server::close_connection(int fd) {
         std::lock_guard<std::mutex> lock(connections_mutex_);
         auto it = connections_.find(fd);
         if (it != connections_.end()) {
-            conn_to_close = std::move(it->second); // Take ownership
+            conn_to_close = std::move(it->second); // Take ownership and remove from map
             connections_.erase(it);
         }
     }

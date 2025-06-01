@@ -26,9 +26,13 @@ public:
 
     // This will now hold either a string response or an active file stream
     // Add FilePath to the variant to differentiate the original source
-    std::variant<std::string, std::unique_ptr<std::ifstream>, Http::FilePath> write_content_;
+    std::variant<std::string, std::unique_ptr<std::ifstream>> write_content_; // Removed Http::FilePath, now only string or ifstream
     size_t file_bytes_sent_ = 0; // For file streaming: track bytes sent
     bool headers_sent_ = false; // To ensure headers are sent only once
+
+    // Store the raw headers string to be sent for file responses
+    std::string raw_headers_to_send_; 
+    std::string file_path_to_stream_; // Store the file path for file responses
 
     Http::HttpParser http_parser_;
     Http::HttpRequest current_request_; // Holds the parsed request data

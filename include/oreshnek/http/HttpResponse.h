@@ -53,7 +53,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_headers() const { return headers_; }
     // Get the body as a string. This will *read the file into string* if it's a file response.
     // Use get_body_variant() for direct access to the underlying storage without reading files.
-    const std::string& get_body() const; // Will populate if is_file_response_
+    // REMOVED: const std::string& get_body() const; // This method is problematic for large files and streaming
 
     // New getter to know if it's a file response
     bool is_file() const { return is_file_response_; }
