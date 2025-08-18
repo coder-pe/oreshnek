@@ -1,7 +1,7 @@
 // oreshnek/src/json/JsonParser.cpp
 #include "oreshnek/json/JsonParser.h"
-#include <charconv> // For std::from_chars (C++17 for numeric conversions)
 #include <limits>   // For numeric_limits
+#include <stdexcept> // For std::runtime_error
 
 namespace Oreshnek {
 namespace Json {
@@ -73,17 +73,14 @@ JsonValue JsonParser::parse_number(std::string_view& data) {
     std::string_view num_str = data.substr(0, i);
     data.remove_prefix(i);
 
-    double value;
-    auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.length(), value);
-
-    if (ec == std::errc()) {
+    try {
+        std::string num_string(num_str);
+        double value = std::stod(num_string);
         return JsonValue(value);
-    } else if (ec == std::errc::invalid_argument) {
+    } catch (const std::invalid_argument& e) {
         throw std::runtime_error("Invalid number format: " + std::string(num_str));
-    } else if (ec == std::errc::result_out_of_range) {
+    } catch (const std::out_of_range& e) {
         throw std::runtime_error("Number out of range: " + std::string(num_str));
-    } else {
-        throw std::runtime_error("Failed to parse number: " + std::string(num_str));
     }
 }
 

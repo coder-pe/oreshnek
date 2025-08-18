@@ -15,7 +15,8 @@ namespace Platform {
 namespace Oreshnek {
 namespace Platform {
 
-using json = nlohmann::json;
+using JsonValue = Oreshnek::Json::JsonValue;
+using JsonParser = Oreshnek::Json::JsonParser;
 
 std::string SecurityUtils::hashPassword(const std::string& password, const std::string& salt) {
     std::string salted = password + salt;
@@ -43,15 +44,17 @@ std::string SecurityUtils::generateSalt() {
 }
 
 std::string SecurityUtils::generateJWT(int user_id, const std::string& username, const std::string& secret) {
-    json header = {{"alg", "HS256"}, {"typ", "JWT"}};
-    json payload = {
-        {"user_id", user_id},
-        {"username", username},
-        {"exp", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() + 24*3600}
-    };
+    JsonValue header = JsonValue::object();
+    header["alg"] = JsonValue("HS256");
+    header["typ"] = JsonValue("JWT");
+    
+    JsonValue payload = JsonValue::object();
+    payload["user_id"] = JsonValue(user_id);
+    payload["username"] = JsonValue(username);
+    payload["exp"] = JsonValue(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() + 24*3600);
 
-    std::string header_str = base64_encode(header.dump());
-    std::string payload_str = base64_encode(payload.dump());
+    std::string header_str = base64_encode(header.to_string());
+    std::string payload_str = base64_encode(payload.to_string());
     
     std::string signature = hmac_sha256(header_str + "." + payload_str, secret);
     return header_str + "." + payload_str + "." + signature;
@@ -65,17 +68,17 @@ bool SecurityUtils::validateJWT(const std::string& token, const std::string& sec
     return parts[2] == expected_signature;
 }
 
-json SecurityUtils::decodeJWT(const std::string& token) {
+JsonValue SecurityUtils::decodeJWT(const std::string& token) {
     std::vector<std::string> parts = split(token, '.');
     if (parts.size() < 2) {
-        return nullptr; // Invalid JWT format
+        return JsonValue(); // Invalid JWT format - return null JsonValue
     }
     try {
         std::string decoded_payload = base64_decode(parts[1]); // Calls the newly declared base64_decode
-        return json::parse(decoded_payload);
+        return JsonParser::parse(decoded_payload);
     } catch (const std::exception& e) {
         std::cerr << "Error decoding JWT payload: " << e.what() << std::endl;
-        return nullptr;
+        return JsonValue(); // Return null JsonValue on error
     }
 }
 

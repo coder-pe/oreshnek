@@ -11,7 +11,8 @@
 #include <openssl/rand.h> // For RAND_bytes
 #include <openssl/evp.h> // For EVP_sha256 (HMAC is in hmac.h)
 #include <openssl/hmac.h> // <<< ADD THIS LINE for HMAC
-#include <nlohmann/json.hpp> // For JSON Web Token
+#include "oreshnek/json/JsonValue.h" // Use project's JSON implementation
+#include "oreshnek/json/JsonParser.h" // For JSON parsing
 
 namespace Oreshnek {
 namespace Platform {
@@ -22,7 +23,7 @@ public:
     static std::string generateSalt(); //
     static std::string generateJWT(int user_id, const std::string& username, const std::string& secret); //
     static bool validateJWT(const std::string& token, const std::string& secret); //
-    static nlohmann::json decodeJWT(const std::string& token);
+    static Oreshnek::Json::JsonValue decodeJWT(const std::string& token);
 
 private:
     static std::string base64_encode(const std::string& input); //

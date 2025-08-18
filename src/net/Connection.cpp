@@ -147,7 +147,9 @@ ssize_t Connection::write_data() {
                     file_bytes_sent_ += bytes_sent;
                     // If partial send, rewind file stream
                     if (bytes_sent < bytes_to_send) {
-                        file_stream->seekg(file_stream->tellg() - (bytes_to_send - bytes_sent));
+                        std::streampos current_pos = file_stream->tellg();
+                        std::streamoff offset = static_cast<std::streamoff>(bytes_to_send - bytes_sent);
+                        file_stream->seekg(current_pos - offset);
                     }
                     bytes_sent_in_call += bytes_sent;
                 } else if (bytes_sent < 0) {

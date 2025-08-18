@@ -9,9 +9,13 @@
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
 
-// For sendfile (Linux specific)
+// Platform specific includes
 #ifdef __linux__
 #include <sys/sendfile.h>
+#include <sys/epoll.h>
+#elif __APPLE__
+#include <sys/event.h>
+// For macOS sendfile equivalent, we'll use standard read/write
 #endif
 #include <sys/stat.h> // For stat (to get file size and check existence)
 
@@ -19,7 +23,13 @@ namespace Oreshnek {
 namespace Server {
 
 Server::Server(size_t worker_threads)
-    : listen_fd_(-1), epoll_fd_(-1), running_(false) {
+    : listen_fd_(-1), 
+#ifdef __linux__
+      epoll_fd_(-1), 
+#elif __APPLE__
+      kqueue_fd_(-1),
+#endif
+      running_(false) {
     router_ = std::make_unique<Router>();
     thread_pool_ = std::make_unique<ThreadPool>(worker_threads);
 }
@@ -97,6 +107,7 @@ bool Server::setup_socket(const std::string& host, int port) {
     return true;
 }
 
+#ifdef __linux__
 bool Server::setup_epoll() {
     epoll_fd_ = epoll_create1(0); // 0 for flags, not deprecated
     if (epoll_fd_ < 0) {
@@ -114,36 +125,78 @@ bool Server::setup_epoll() {
     }
     return true;
 }
+#elif __APPLE__
+bool Server::setup_kqueue() {
+    kqueue_fd_ = kqueue();
+    if (kqueue_fd_ < 0) {
+        std::cerr << "Failed to create kqueue instance: " << strerror(errno) << std::endl;
+        return false;
+    }
+
+    struct kevent change_event;
+    EV_SET(&change_event, listen_fd_, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    
+    if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+        std::cerr << "Failed to add listen socket to kqueue: " << strerror(errno) << std::endl;
+        close(kqueue_fd_);
+        return false;
+    }
+    return true;
+}
+#endif
 
 bool Server::listen(const std::string& host, int port) {
     if (!setup_socket(host, port)) {
         return false;
     }
+#ifdef __linux__
     if (!setup_epoll()) {
         close(listen_fd_);
         return false;
     }
+#elif __APPLE__
+    if (!setup_kqueue()) {
+        close(listen_fd_);
+        return false;
+    }
+#endif
     running_ = true;
     return true;
 }
 
 void Server::run() {
+#ifdef __linux__
     epoll_event events[MAX_EVENTS];
+#elif __APPLE__
+    struct kevent events[MAX_EVENTS];
+#endif
     auto last_cleanup = std::chrono::steady_clock::now();
 
     while (running_) {
+#ifdef __linux__
         int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, 1000); // 1-second timeout
+#elif __APPLE__
+        struct timespec timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_nsec = 0;
+        int num_events = kevent(kqueue_fd_, NULL, 0, events, MAX_EVENTS, &timeout);
+#endif
 
         if (num_events < 0) {
             if (errno == EINTR) {
                 continue; // Interrupted by signal
             }
+#ifdef __linux__
             std::cerr << "epoll_wait failed: " << strerror(errno) << std::endl;
+#elif __APPLE__
+            std::cerr << "kevent failed: " << strerror(errno) << std::endl;
+#endif
             running_ = false; // Critical error, stop server
             break;
         }
 
         for (int i = 0; i < num_events; ++i) {
+#ifdef __linux__
             int fd = events[i].data.fd;
             uint32_t event_flags = events[i].events;
 
@@ -168,6 +221,33 @@ void Server::run() {
                     close_connection(fd);
                 }
             }
+#elif __APPLE__
+            int fd = (int)events[i].ident;
+            int16_t event_filter = events[i].filter;
+            uint16_t event_flags = events[i].flags;
+
+            if (fd == listen_fd_) {
+                // New connection
+                if (event_filter == EVFILT_READ) { // kqueue read event
+                    handle_new_connection();
+                }
+            } else {
+                // Existing client connection
+                // Read events
+                if (event_filter == EVFILT_READ) {
+                    handle_client_data(fd);
+                }
+                // Write events
+                if (event_filter == EVFILT_WRITE) {
+                    handle_write_ready(fd);
+                }
+                // Error handling for kqueue would be different
+                if (event_flags & EV_EOF) {
+                    std::cerr << "Kqueue EOF on fd " << fd << std::endl;
+                    close_connection(fd);
+                }
+            }
+#endif
         }
 
         // Periodic cleanup of expired connections (e.g., every 30 seconds)
@@ -194,11 +274,18 @@ void Server::stop() {
         connections_.clear();
     }
 
-    // Close server sockets and epoll instance
+    // Close server sockets and event loop instance
+#ifdef __linux__
     if (epoll_fd_ >= 0) {
         close(epoll_fd_);
         epoll_fd_ = -1;
     }
+#elif __APPLE__
+    if (kqueue_fd_ >= 0) {
+        close(kqueue_fd_);
+        kqueue_fd_ = -1;
+    }
+#endif
     if (listen_fd_ >= 0) {
         close(listen_fd_);
         listen_fd_ = -1;
@@ -224,6 +311,7 @@ void Server::handle_new_connection() {
             continue;
         }
 
+#ifdef __linux__
         epoll_event event;
         event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; 
         event.data.fd = client_fd;
@@ -232,6 +320,15 @@ void Server::handle_new_connection() {
             close(client_fd);
             continue;
         }
+#elif __APPLE__
+        struct kevent change_event;
+        EV_SET(&change_event, client_fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
+        if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+            std::cerr << "Failed to add client socket to kqueue: " << strerror(errno) << std::endl;
+            close(client_fd);
+            continue;
+        }
+#endif
 
         {
             std::lock_guard<std::mutex> lock(connections_mutex_);
@@ -313,6 +410,7 @@ void Server::handle_client_data(int fd) {
             conn_ptr->http_parser_.reset(); // Reset parser for next request on same connection
 
             // Re-arm connection for writing and subsequent reads
+#ifdef __linux__
             epoll_event event;
             event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT; // Request write event
 
@@ -326,12 +424,24 @@ void Server::handle_client_data(int fd) {
                     this->close_connection(fd);
                 }
             }
+#elif __APPLE__
+            struct kevent change_event;
+            EV_SET(&change_event, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
+            {
+                std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
+                if (kevent(this->kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+                    std::cerr << "Failed to re-arm kqueue for write on fd " << fd << " (from thread pool): " << strerror(errno) << std::endl;
+                    this->close_connection(fd);
+                }
+            }
+#endif
         }); // End of enqueue lambda
     } 
 
     // If no full request was parsed in this call, re-arm for EPOLLIN to read more data.
     // This handles cases where only partial data was received.
     if (!request_parsed_this_call && conn_ptr->is_open()) {
+#ifdef __linux__
         epoll_event event;
         event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
         event.data.fd = fd;
@@ -342,6 +452,17 @@ void Server::handle_client_data(int fd) {
                 close_connection(fd);
             }
         }
+#elif __APPLE__
+        struct kevent change_event;
+        EV_SET(&change_event, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+                std::cerr << "Failed to re-arm kqueue for read on fd " << fd << " after partial read: " << strerror(errno) << std::endl;
+                close_connection(fd);
+            }
+        }
+#endif
     }
 }
 
@@ -375,7 +496,8 @@ void Server::handle_write_ready(int fd) {
     // Check if all data for the current response has been sent
     if (!conn_ptr->has_data_to_write()) {
         // All data sent. Re-arm for reading or close if not keep-alive.
-        if (conn_ptr->keep_alive_) { 
+        if (conn_ptr->keep_alive_) {
+#ifdef __linux__
             epoll_event event;
             event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Read more data for next request
             event.data.fd = fd;
@@ -388,12 +510,25 @@ void Server::handle_write_ready(int fd) {
                     close_connection(fd);
                 }
             }
+#elif __APPLE__
+            struct kevent change_event;
+            EV_SET(&change_event, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
+            conn_ptr->reset();
+            {
+                std::lock_guard<std::mutex> lock(connections_mutex_);
+                if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+                    std::cerr << "Failed to re-arm kqueue for read on fd " << fd << ": " << strerror(errno) << std::endl;
+                    close_connection(fd);
+                }
+            }
+#endif
         } else {
             // Not keep-alive, close connection
             close_connection(fd);
         }
     } else {
         // Still data to send, re-arm for EPOLLOUT
+#ifdef __linux__
         epoll_event event;
         event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
         event.data.fd = fd;
@@ -404,10 +539,22 @@ void Server::handle_write_ready(int fd) {
                 close_connection(fd);
             }
         }
+#elif __APPLE__
+        struct kevent change_event;
+        EV_SET(&change_event, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+                std::cerr << "Failed to re-arm kqueue for write on fd " << fd << ": " << strerror(errno) << std::endl;
+                close_connection(fd);
+            }
+        }
+#endif
     }
 }
 
 void Server::close_connection(int fd) {
+#ifdef __linux__
     // 1. Remove from epoll FIRST
     if (epoll_fd_ >= 0) {
         epoll_event event; // Dummy event is fine for EPOLL_CTL_DEL
@@ -416,6 +563,11 @@ void Server::close_connection(int fd) {
             // It's possible the fd was already removed or is invalid, so continue.
         }
     }
+#elif __APPLE__
+    // For kqueue, removing the event is not strictly necessary as close() does it.
+    // However, explicitly removing it can be cleaner if you have complex event management.
+    // We'll rely on close() for simplicity here.
+#endif
 
     // 2. Remove from map and then explicitly close the connection (which closes the socket)
     std::unique_ptr<Net::Connection> conn_to_close;

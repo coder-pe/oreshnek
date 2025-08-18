@@ -13,7 +13,13 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
-#include <sys/epoll.h> // For epoll structures
+
+#ifdef __linux__
+#include <sys/epoll.h> // For epoll structures on Linux
+#elif __APPLE__
+#include <sys/event.h> // For kqueue on macOS
+#include <sys/select.h> // For select fallback
+#endif
 
 namespace Oreshnek {
 namespace Server {
@@ -21,7 +27,11 @@ namespace Server {
 class Server {
 private:
     int listen_fd_; // Listening socket file descriptor
+#ifdef __linux__
     int epoll_fd_;  // Epoll instance file descriptor
+#elif __APPLE__
+    int kqueue_fd_; // Kqueue instance file descriptor
+#endif
     std::atomic<bool> running_; // Flag to control server loop
 
     std::unique_ptr<Router> router_;
@@ -61,9 +71,13 @@ public:
     void stop();
 
 private:
-    // Helper functions for socket and epoll setup
+    // Helper functions for socket and event system setup
     bool setup_socket(const std::string& host, int port);
+#ifdef __linux__
     bool setup_epoll();
+#elif __APPLE__
+    bool setup_kqueue();
+#endif
     void set_non_blocking(int fd); // Declared in original server.cpp, useful utility
 
     // Event handlers

@@ -391,15 +391,26 @@ int main() {
             }
 
             // Extract user_id from JWT payload
-            nlohmann::json jwt_payload = Oreshnek::Platform::SecurityUtils::decodeJWT(token);
-            if (jwt_payload.is_null() || !jwt_payload.contains("user_id")) {
+            Oreshnek::JsonValue jwt_payload = Oreshnek::Platform::SecurityUtils::decodeJWT(token);
+            if (jwt_payload.is_null() || !jwt_payload.is_object()) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid token payload";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
                 return;
             }
-            int user_id = jwt_payload["user_id"].get<int>();
+            
+            // Check if user_id exists in the payload
+            int user_id;
+            try {
+                user_id = (int)jwt_payload["user_id"].get_number();
+            } catch (const std::exception& e) {
+                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                error_json["success"] = false;
+                error_json["message"] = "Invalid token payload - missing user_id";
+                res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
+                return;
+            }
 
             // Simplified multipart/form-data parsing
             auto content_type_header_opt = req.header("Content-Type");

@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <functional>
 #include <future> // For std::future
+#include <type_traits> // For std::invoke_result
 
 namespace Oreshnek {
 namespace Server {
@@ -20,7 +21,7 @@ public:
 
     // Enqueue a task to be executed by a worker thread
     template<class F, class... Args>
-    auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>;
+    auto enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type>;
 
     // Shutdown the thread pool gracefully
     void shutdown();
@@ -36,8 +37,8 @@ private:
 
 // Template implementation must be in header for compilation or use explicit instantiation.
 template<class F, class... Args>
-auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
-    using return_type = typename std::result_of<F(Args...)>::type;
+auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
 
     auto task = std::make_shared<std::packaged_task<return_type()>>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
