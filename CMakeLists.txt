@@ -70,12 +70,19 @@ target_compile_options(oreshnek_server PRIVATE -Wall -Wextra -pedantic)
 if(ORESHNEK_BUILD_TESTS)
     enable_testing()
 
+    set(ORESHNEK_TEST_ENV
+        "ASAN_OPTIONS=abort_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1;TSAN_OPTIONS=halt_on_error=1")
+
     add_executable(integration_test tests/integration_test.cpp)
     target_link_libraries(integration_test PRIVATE oreshnek oreshnek_sanitizers)
     target_compile_options(integration_test PRIVATE -Wall -Wextra)
     add_test(NAME integration_test COMMAND integration_test)
     # Fail fast and surface sanitizer reports as test failures.
-    set_tests_properties(integration_test PROPERTIES
-        ENVIRONMENT "ASAN_OPTIONS=abort_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1;TSAN_OPTIONS=halt_on_error=1"
-        TIMEOUT 60)
+    set_tests_properties(integration_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
+    add_executable(security_test tests/security_test.cpp)
+    target_link_libraries(security_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(security_test PRIVATE -Wall -Wextra)
+    add_test(NAME security_test COMMAND security_test)
+    set_tests_properties(security_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 endif()
