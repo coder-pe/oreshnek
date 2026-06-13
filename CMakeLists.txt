@@ -1,63 +1,81 @@
 # CMakeLists.txt
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.16)
 project(OreshnekServer CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Define include directories (para tus propios headers)
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
 
-file(GLOB_RECURSE ORESHNEK_SOURCES
-    "src/*.cpp"
-    "src/*/*.cpp"
-)
+# --- Options -----------------------------------------------------------------
+option(ORESHNEK_ASAN  "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+option(ORESHNEK_TSAN  "Build with ThreadSanitizer" OFF)
+option(ORESHNEK_BUILD_TESTS "Build the test suite" ON)
 
-# --- Find Threads ---
-find_package(Threads REQUIRED) # <<< --- AÑADE ESTA LÍNEA
+if(ORESHNEK_ASAN AND ORESHNEK_TSAN)
+    message(FATAL_ERROR "ORESHNEK_ASAN and ORESHNEK_TSAN are mutually exclusive.")
+endif()
 
-# --- Find OpenSSL ---
+# Sanitizer flags are applied to every target so the runtime is consistent.
+add_library(oreshnek_sanitizers INTERFACE)
+if(ORESHNEK_ASAN)
+    message(STATUS "Sanitizers: AddressSanitizer + UndefinedBehaviorSanitizer")
+    target_compile_options(oreshnek_sanitizers INTERFACE
+        -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+    target_link_options(oreshnek_sanitizers INTERFACE -fsanitize=address,undefined)
+elseif(ORESHNEK_TSAN)
+    message(STATUS "Sanitizers: ThreadSanitizer")
+    target_compile_options(oreshnek_sanitizers INTERFACE
+        -fsanitize=thread -fno-omit-frame-pointer)
+    target_link_options(oreshnek_sanitizers INTERFACE -fsanitize=thread)
+endif()
+
+# --- Dependencies ------------------------------------------------------------
+find_package(Threads REQUIRED)
+
 find_package(OpenSSL REQUIRED)
-if (OPENSSL_FOUND)
-    message(STATUS "Found OpenSSL libraries: ${OpenSSL_LIBRARIES}")
-    message(STATUS "Found OpenSSL include dir: ${OpenSSL_INCLUDE_DIR}")
-    # No necesitas include_directories(${OPENSSL_INCLUDE_DIR}) si usas imported targets
-    # No necesitas set(OPENSSL_LIBRARIES ...) si usas imported targets
-else()
-    message(FATAL_ERROR "OpenSSL not found. Please install it or specify its path.")
+if(OPENSSL_FOUND)
+    message(STATUS "Found OpenSSL: ${OPENSSL_VERSION}")
 endif()
 
-# --- Find SQLite3 ---
 find_package(SQLite3 REQUIRED)
-if (SQLITE3_FOUND)
-    message(STATUS "Found SQLite3 library: ${SQLite3_LIBRARY}") # O SQLite3_LIBRARIES
-    message(STATUS "Found SQLite3 include dir: ${SQLite3_INCLUDE_DIR}") # 
-    # No necesitas include_directories(${SQLITE3_INCLUDE_DIR}) si usas imported targets
-else()
-    message(FATAL_ERROR "SQLite3 not found. Please install it or specify its path.") # 
+if(SQLITE3_FOUND)
+    message(STATUS "Found SQLite3: ${SQLite3_VERSION}")
 endif()
 
-add_executable(oreshnek_server ${ORESHNEK_SOURCES})
+# --- Framework library -------------------------------------------------------
+# Everything under src/ except the application entry point (main.cpp).
+file(GLOB_RECURSE ORESHNEK_LIB_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+list(FILTER ORESHNEK_LIB_SOURCES EXCLUDE REGEX ".*/main\\.cpp$")
 
-# Link necessary libraries usando imported targets
-target_link_libraries(oreshnek_server PRIVATE
-    Threads::Threads   # Para pthreads
-    m                  # Para la biblioteca matemática, si es necesaria
-    OpenSSL::Crypto    # Para funciones criptográficas de OpenSSL (SHA, HMAC, etc.)
-                       # Si usas funciones SSL/TLS directamente, añade OpenSSL::SSL también.
-    SQLite::SQLite3    # Para SQLite3
+add_library(oreshnek STATIC ${ORESHNEK_LIB_SOURCES})
+target_include_directories(oreshnek PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(oreshnek PUBLIC
+    Threads::Threads
+    OpenSSL::Crypto
+    SQLite::SQLite3
+    oreshnek_sanitizers
 )
+target_compile_options(oreshnek PRIVATE -Wall -Wextra -pedantic)
 
-target_compile_options(oreshnek_server PRIVATE
-    -Wall
-    -Wextra
-    -pedantic
-    -g
-    -O2
-    -D_DEFAULT_SOURCE
-)
+# --- Application -------------------------------------------------------------
+add_executable(oreshnek_server src/main.cpp)
+target_link_libraries(oreshnek_server PRIVATE oreshnek oreshnek_sanitizers)
+target_compile_options(oreshnek_server PRIVATE -Wall -Wextra -pedantic)
 
-# Opcional: Configuraciones de instalación y sanitizers como los tenías.
+# --- Tests -------------------------------------------------------------------
+if(ORESHNEK_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(integration_test tests/integration_test.cpp)
+    target_link_libraries(integration_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(integration_test PRIVATE -Wall -Wextra)
+    add_test(NAME integration_test COMMAND integration_test)
+    # Fail fast and surface sanitizer reports as test failures.
+    set_tests_properties(integration_test PROPERTIES
+        ENVIRONMENT "ASAN_OPTIONS=abort_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1;TSAN_OPTIONS=halt_on_error=1"
+        TIMEOUT 60)
+endif()
