@@ -556,7 +556,9 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
         return;
     }
 
-    // Incomplete request: wait for more data.
+    // Incomplete request: if the client is waiting for "100 Continue" before
+    // sending the body, send it now, then wait for more data.
+    conn->maybe_send_100_continue();
     rearm(fd, /*read=*/true);
 }
 

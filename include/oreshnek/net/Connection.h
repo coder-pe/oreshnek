@@ -43,6 +43,7 @@ public:
     off_t file_remaining_ = 0; // Bytes still to send
 
     bool head_only_ = false;   // HEAD request: emit headers, suppress body
+    bool continue_sent_ = false; // "100 Continue" already sent for current request
 
     Http::HttpParser http_parser_;
     Http::HttpRequest current_request_; // Holds the parsed request data
@@ -89,6 +90,11 @@ public:
 
     // Drop `n` bytes from the front of the read buffer.
     void consume(size_t n);
+
+    // If the (partially parsed) current request is awaiting a body and carries
+    // "Expect: 100-continue", send a one-shot "100 Continue" so the client
+    // starts uploading. No-op if already sent or not applicable.
+    void maybe_send_100_continue();
 
     // Close the socket connection
     void close_connection();

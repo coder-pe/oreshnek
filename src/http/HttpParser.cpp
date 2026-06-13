@@ -1,6 +1,7 @@
 // oreshnek/src/http/HttpParser.cpp
 #include "oreshnek/http/HttpParser.h"
 #include <algorithm> // For std::min
+#include <cstring>   // For std::memmove
 #include <iostream>  // For debugging
 #include <string_view>
 
@@ -163,9 +164,26 @@ bool HttpParser::parse_headers(std::string_view& data, HttpRequest& request) {
         data.remove_prefix(eol_pos + 2); // Consume line and CRLF
 
         if (line.empty()) {
-            // Empty line indicates end of headers
-            // Check for Content-Length or Transfer-Encoding
+            // Empty line indicates end of headers. Determine body framing.
             auto content_length_header = request.header("Content-Length");
+            auto transfer_encoding_header = request.header("Transfer-Encoding");
+            bool chunked = transfer_encoding_header &&
+                           transfer_encoding_header->find("chunked") != std::string_view::npos;
+
+            // Both Content-Length and Transfer-Encoding is a request-smuggling
+            // vector (RFC 7230 §3.3.3): reject.
+            if (chunked && content_length_header) {
+                state_ = ParsingState::ERROR;
+                error_message_ = "Both Content-Length and Transfer-Encoding present";
+                return false;
+            }
+
+            if (chunked) {
+                is_chunked_ = true;
+                state_ = ParsingState::BODY;
+                return true;
+            }
+
             if (content_length_header) {
                 try {
                     body_expected_length_ = std::stoul(std::string(*content_length_header));
@@ -179,22 +197,9 @@ bool HttpParser::parse_headers(std::string_view& data, HttpRequest& request) {
                     error_message_ = "Request body exceeds maximum allowed size";
                     return false;
                 }
-            } else {
-                auto transfer_encoding_header = request.header("Transfer-Encoding");
-                if (transfer_encoding_header && *transfer_encoding_header == "chunked") {
-                    is_chunked_ = true;
-                    // Chunked encoding requires special handling for body parsing
-                    state_ = ParsingState::ERROR; // Not implemented yet
-                    error_message_ = "Chunked Transfer-Encoding not implemented.";
-                    return false;
-                }
             }
 
-            if (body_expected_length_ > 0 || is_chunked_) {
-                state_ = ParsingState::BODY;
-            } else {
-                state_ = ParsingState::COMPLETE;
-            }
+            state_ = (body_expected_length_ > 0) ? ParsingState::BODY : ParsingState::COMPLETE;
             return true;
         }
 
@@ -224,13 +229,31 @@ bool HttpParser::parse_headers(std::string_view& data, HttpRequest& request) {
     }
 }
 
+namespace {
+// Parse a hex chunk-size token (stopping at ';' chunk extensions or CRLF).
+// Returns false on an empty/invalid token.
+bool parse_chunk_size(std::string_view token, size_t& out) {
+    size_t semi = token.find(';');
+    if (semi != std::string_view::npos) token = token.substr(0, semi);
+    // Trim trailing spaces.
+    while (!token.empty() && (token.back() == ' ' || token.back() == '\t')) token.remove_suffix(1);
+    if (token.empty()) return false;
+    out = 0;
+    for (char c : token) {
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else return false;
+        out = out * 16 + static_cast<size_t>(d);
+    }
+    return true;
+}
+}  // namespace
+
 bool HttpParser::parse_body(std::string_view& data, HttpRequest& request) {
     if (is_chunked_) {
-        // This part needs a dedicated chunked decoder implementation.
-        // For now, if we encounter chunked, we marked it as error in parse_headers.
-        state_ = ParsingState::ERROR;
-        error_message_ = "Chunked Transfer-Encoding is not implemented.";
-        return false;
+        return parse_chunked_body(data, request);
     }
 
     if (body_expected_length_ > 0) {
@@ -247,6 +270,73 @@ bool HttpParser::parse_body(std::string_view& data, HttpRequest& request) {
         state_ = ParsingState::COMPLETE;
         return true;
     }
+}
+
+bool HttpParser::parse_chunked_body(std::string_view& data, HttpRequest& request) {
+    // Pass 1: verify the whole chunked body (incl. terminating 0-chunk and final
+    // CRLF) is present, WITHOUT mutating the buffer. parse_next() re-parses from
+    // scratch on every read, so we must not mutate until we know it is complete.
+    {
+        std::string_view scan = data;
+        size_t decoded_total = 0;
+        while (true) {
+            size_t eol = scan.find("\r\n");
+            if (eol == std::string_view::npos) return false; // need more (size line)
+            size_t sz = 0;
+            if (!parse_chunk_size(scan.substr(0, eol), sz)) {
+                state_ = ParsingState::ERROR;
+                error_message_ = "Invalid chunk size";
+                return false;
+            }
+            scan.remove_prefix(eol + 2);
+            if (sz == 0) {
+                // Last chunk: skip optional trailer lines until a blank line.
+                while (true) {
+                    size_t e = scan.find("\r\n");
+                    if (e == std::string_view::npos) return false; // need final CRLF
+                    if (e == 0) { scan.remove_prefix(2); break; } // blank line ends body
+                    scan.remove_prefix(e + 2); // skip trailer header line
+                }
+                break;
+            }
+            decoded_total += sz;
+            if (decoded_total > MAX_BODY_BYTES) {
+                state_ = ParsingState::ERROR;
+                error_message_ = "Chunked body exceeds maximum allowed size";
+                return false;
+            }
+            if (scan.size() < sz + 2) return false; // need chunk data + trailing CRLF
+            scan.remove_prefix(sz + 2);
+        }
+    }
+
+    // Pass 2: the body is complete — compact decoded bytes in place. Each write
+    // position trails the chunk data being read, so the overlap is safe.
+    char* out_base = const_cast<char*>(data.data());
+    size_t out = 0;
+    std::string_view cur = data;
+    while (true) {
+        size_t eol = cur.find("\r\n");
+        size_t sz = 0;
+        parse_chunk_size(cur.substr(0, eol), sz); // validated in pass 1
+        cur.remove_prefix(eol + 2);
+        if (sz == 0) {
+            while (true) {
+                size_t e = cur.find("\r\n");
+                if (e == 0) { cur.remove_prefix(2); break; }
+                cur.remove_prefix(e + 2);
+            }
+            break;
+        }
+        std::memmove(out_base + out, cur.data(), sz);
+        out += sz;
+        cur.remove_prefix(sz + 2);
+    }
+
+    request.body_ = std::string_view(out_base, out);
+    data.remove_prefix(data.size() - cur.size()); // advance past the whole chunked body
+    state_ = ParsingState::COMPLETE;
+    return true;
 }
 
 } // namespace Http

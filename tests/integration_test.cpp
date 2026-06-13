@@ -299,6 +299,52 @@ void test_head() {
     check(ping.body == "pong", "head: keep-alive after HEAD works");
 }
 
+void test_chunked() {
+    Client c;
+    check(c.connect(), "chunked: connect");
+    // "Wiki" + "pedia" + " in\r\n\r\nchunks." => decoded body.
+    std::string req =
+        "POST /echo HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "4\r\nWiki\r\n"
+        "5\r\npedia\r\n"
+        "E\r\n in\r\n\r\nchunks.\r\n"
+        "0\r\n\r\n";
+    check(c.send_all(req), "chunked: send");
+    Client::Response resp;
+    check(c.read_response(resp), "chunked: read");
+    check(resp.status == 200, "chunked: status 200, got " + std::to_string(resp.status));
+    check(resp.body == "Wikipedia in\r\n\r\nchunks.",
+          "chunked: decoded body matches, got '" + resp.body + "'");
+}
+
+void test_expect_continue() {
+    Client c;
+    check(c.connect(), "expect: connect");
+    // Send headers only, advertising Expect: 100-continue.
+    std::string head =
+        "POST /echo HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 5\r\n"
+        "Expect: 100-continue\r\n"
+        "\r\n";
+    check(c.send_all(head), "expect: send headers");
+
+    Client::Response interim;
+    check(c.read_response(interim), "expect: read 100");
+    check(interim.status == 100, "expect: got 100 Continue, got " + std::to_string(interim.status));
+
+    // Now send the body and read the final response.
+    check(c.send_all("hello"), "expect: send body");
+    Client::Response resp;
+    check(c.read_response(resp), "expect: read final");
+    check(resp.status == 200, "expect: final status 200");
+    check(resp.body == "hello", "expect: echoed body == hello, got '" + resp.body + "'");
+}
+
 }  // namespace
 
 int main() {
@@ -341,6 +387,8 @@ int main() {
     test_file_full();
     test_file_range();
     test_head();
+    test_chunked();
+    test_expect_continue();
 
     // Correct shutdown contract: signal the loop, then join its thread. run()
     // tears down its own connections/fds; the Server destructor stops the pool.

@@ -7,6 +7,7 @@
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
 #include <algorithm>  // For std::min
+#include <cctype>     // For std::tolower
 #include "oreshnek/utils/Logger.h"
 
 #ifdef __linux__
@@ -43,6 +44,7 @@ void Connection::reset() {
     current_request_ = Http::HttpRequest(); // Reset HttpRequest
     keep_alive_ = true; // Assume keep-alive by default for new requests
     processing_ = false;
+    continue_sent_ = false;
     clear_response_state();
     update_activity();
 }
@@ -247,6 +249,23 @@ void Connection::consume(size_t n) {
     }
     std::memmove(read_buffer_.data(), read_buffer_.data() + n, read_buffer_fill_ - n);
     read_buffer_fill_ -= n;
+}
+
+void Connection::maybe_send_100_continue() {
+    if (continue_sent_ || socket_fd_ < 0) return;
+    // Only once the headers are parsed and a body is awaited.
+    if (http_parser_.get_state() != Http::ParsingState::BODY) return;
+
+    auto expect = current_request_.header("Expect");
+    if (!expect) return;
+    // Case-insensitive check for "100-continue".
+    std::string value(*expect);
+    for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (value.find("100-continue") == std::string::npos) return;
+
+    static const char kContinue[] = "HTTP/1.1 100 Continue\r\n\r\n";
+    ::send(socket_fd_, kContinue, sizeof(kContinue) - 1, MSG_NOSIGNAL); // best-effort
+    continue_sent_ = true;
 }
 
 void Connection::close_connection() {
