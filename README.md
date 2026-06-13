@@ -2,11 +2,13 @@
 
 Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado para construir aplicaciones y APIs web rápidas y escalables. Utiliza un modelo asíncrono y basado en eventos con `epoll` en Linux y `kqueue` en macOS para una gestión eficiente de las conexiones.
 
-> **Estado:** en endurecimiento hacia producción. El modelo de concurrencia ya
-> es seguro (sin data races ni use-after-free, verificado con sanitizers — ver
-> Fase 1). El plan de madurez y su progreso están en
-> [`docs/ROADMAP.md`](docs/ROADMAP.md), y el modelo de ejecución en
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+> **Estado:** en endurecimiento hacia producción. Completadas las fases de
+> estabilidad/concurrencia (sin data races ni use-after-free, verificado con
+> sanitizers), seguridad (JWT/PBKDF2, anti directory-traversal, límites) y
+> HTTP/1.1 + streaming. El plan y su progreso están en
+> [`docs/ROADMAP.md`](docs/ROADMAP.md); el modelo de ejecución en
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) y la seguridad en
+> [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Características Principales
 
@@ -14,8 +16,10 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 *   **Moderno:** Escrito completamente en C++20, aprovechando las últimas características del lenguaje.
 *   **Multihilo:** Utiliza un pool de hilos para procesar las peticiones de forma concurrente y no bloqueante.
 *   **Enrutador (Router):** Un sistema de enrutamiento simple pero potente para mapear rutas y métodos HTTP a funciones manejadoras (handlers).
-*   **Manejo de HTTP:** Clases para gestionar peticiones (`HttpRequest`) y respuestas (`HttpResponse`) de forma sencilla.
-*   **Procesamiento de JSON:** Incluye un parser y constructor de JSON nativo para trabajar fácilmente con APIs.
+*   **Manejo de HTTP/1.1:** Peticiones (`HttpRequest`) y respuestas (`HttpResponse`), keep-alive, pipelining, `Transfer-Encoding: chunked`, `Expect: 100-continue` y `HEAD`.
+*   **Streaming de ficheros:** Servido zero-copy con `sendfile` y **Range requests** (`206 Partial Content`) para vídeo y descargas reanudables.
+*   **Procesamiento de JSON:** Usa [nlohmann/json](https://github.com/nlohmann/json) como motor JSON.
+*   **Subidas multipart:** Parser `multipart/form-data` integrado (`Http::Multipart`).
 *   **Extensible:** Diseñado con una arquitectura modular que facilita la adición de nueva funcionalidad.
 
 ## Requisitos
@@ -26,6 +30,7 @@ Para compilar y ejecutar un proyecto con Oreshnek, necesitarás:
 *   CMake (versión 3.16 o superior).
 *   OpenSSL (para funcionalidades criptográficas).
 *   SQLite3 (para la gestión de bases de datos).
+*   nlohmann/json (vendorizado en `nlohmann_json/`, o un paquete del sistema).
 
 ## Cómo Empezar
 

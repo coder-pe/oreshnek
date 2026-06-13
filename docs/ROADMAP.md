@@ -50,16 +50,24 @@ Leyenda: ✅ hecho · 🔄 en progreso · ⬜ pendiente
 - ✅ Tests: `tests/security_test.cpp` (hash/verify de password, JWT válido, secreto
   incorrecto, firma/payload manipulados, decodificación de claims).
 
-## Fase 3 — HTTP/1.1 completo y streaming ⬜ (siguiente)
+## Fase 3 — HTTP/1.1 completo y streaming ✅
 
-- ⬜ Integrar **nlohmann/json** (ya vendorizada en `nlohmann_json/`).
-- ⬜ `sendfile` (Linux) / equivalente macOS para respuestas de fichero.
-- ⬜ Range requests (`206 Partial Content`) — vídeo.
-- ⬜ Decodificación chunked en `HttpParser`.
-- ⬜ `Expect: 100-continue`; HEAD sin body.
-- ⬜ Parser multipart robusto (streaming a disco).
+- ✅ **nlohmann/json** como motor JSON (`JsonValue` = `nlohmann::json`); elimina la
+  pérdida de precisión de enteros y el código JSON propio.
+- ✅ `sendfile` zero-copy para respuestas de fichero (Linux y BSD/macOS); el
+  cuerpo en memoria usa offset (sin `erase(0,n)` O(n²)).
+- ✅ Range requests: `206 Partial Content` con `Content-Range` (incl. sufijo
+  `-N`), `416` si no es satisfacible, `Accept-Ranges: bytes`.
+- ✅ Decodificación chunked en `HttpParser` (dos pasadas, compactación in-place);
+  rechaza `Content-Length` + `Transfer-Encoding` simultáneos (anti smuggling).
+- ✅ `Expect: 100-continue` (envío único) y `HEAD` (enruta a GET, suprime cuerpo).
+- ✅ Parser multipart robusto (`Http::Multipart`), zero-copy; reemplaza el
+  placeholder roto. Tests en `tests/multipart_test.cpp`.
 
-## Fase 4 — Robustez productiva ⬜
+Nota: el cuerpo de la petición aún se almacena completo en el buffer de lectura
+(1 MiB); el streaming de cuerpos grandes a disco queda para más adelante.
+
+## Fase 4 — Robustez productiva ⬜ (siguiente)
 
 - ⬜ Shutdown graceful (drenar peticiones en vuelo con deadline).
 - ⬜ Timeouts de lectura/escritura/idle (`408`/`504`).
