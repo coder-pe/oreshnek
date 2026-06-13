@@ -33,18 +33,24 @@ Leyenda: ✅ hecho · 🔄 en progreso · ⬜ pendiente
 **Resultado:** TSan 0 races, ASan/UBSan 0 errores, `ctest` verde
 (antes: 52 races + SEGV, pipelining corrupto).
 
-## Fase 2 — Seguridad ⬜ (siguiente)
+## Fase 2 — Seguridad ✅
 
-- ⬜ JWT: base64**url**, validar `exp`, rechazar `alg != HS256` (anti `alg:none`),
-  verificar firma antes de decodificar, comparación en **tiempo constante**.
-- ⬜ Corregir UB en `base64_decode` (índice con `char` con signo).
-- ⬜ Passwords: Argon2id (libsodium) o PBKDF2-HMAC-SHA256; **salt por usuario**.
-- ⬜ Migrar `SHA256_*`/`HMAC` a la API EVP de OpenSSL 3 (elimina 3 warnings).
-- ⬜ Ignorar `SIGPIPE` (`SIG_IGN` o `MSG_NOSIGNAL`).
-- ⬜ Canonicalizar rutas estáticas (`std::filesystem::weakly_canonical`).
-- ⬜ Límites de tamaño de headers y body (anti-DoS).
+- ✅ JWT: base64**url** sin padding, valida `exp`, rechaza `alg != HS256`
+  (anti `alg:none`/confusión de algoritmo), verifica firma en **tiempo constante**
+  (`CRYPTO_memcmp`). `decodeJWT` se usa solo tras `validateJWT`.
+- ✅ Corregido el UB en `base64url_decode` (tabla indexada con `unsigned char`).
+- ✅ Passwords: **PBKDF2-HMAC-SHA256** (200k iteraciones) con **salt aleatorio por
+  usuario** embebido en formato `pbkdf2_sha256$iter$salt$hash`; verificación en
+  tiempo constante. (Argon2id queda como opción futura vía libsodium.)
+- ✅ Eliminado el uso de `SHA256_*` (vía `PKCS5_PBKDF2_HMAC`) → 0 warnings.
+- ✅ `SIGPIPE`: `SIG_IGN` en la app + `MSG_NOSIGNAL` (Linux) + `SO_NOSIGPIPE` (macOS).
+- ✅ Rutas estáticas y de vídeo canonicalizadas (`weakly_canonical` + verificación
+  de que el resultado queda dentro del directorio base) → sin directory traversal.
+- ✅ Límites anti-DoS en el parser: header block ≤ 64 KiB, `Content-Length` ≤ 8 MiB.
+- ✅ Tests: `tests/security_test.cpp` (hash/verify de password, JWT válido, secreto
+  incorrecto, firma/payload manipulados, decodificación de claims).
 
-## Fase 3 — HTTP/1.1 completo y streaming ⬜
+## Fase 3 — HTTP/1.1 completo y streaming ⬜ (siguiente)
 
 - ⬜ Integrar **nlohmann/json** (ya vendorizada en `nlohmann_json/`).
 - ⬜ `sendfile` (Linux) / equivalente macOS para respuestas de fichero.

@@ -156,4 +156,4 @@ El framework está organizado en los siguientes módulos principales:
 *   `/src/`: Implementaciones de los ficheros de cabecera correspondientes.
 *   `/static/`: Ficheros estáticos para el ejemplo de la plataforma de video.
 *   `/tests/`: Pruebas de integración del framework.
-*   `/docs/`: Documentación de arquitectura ([`ARCHITECTURE.md`](docs/ARCHITECTURE.md)) y hoja de ruta ([`ROADMAP.md`](docs/ROADMAP.md)).
+*   `/docs/`: Documentación de arquitectura ([`ARCHITECTURE.md`](docs/ARCHITECTURE.md)), seguridad ([`SECURITY.md`](docs/SECURITY.md)) y hoja de ruta ([`ROADMAP.md`](docs/ROADMAP.md)).
