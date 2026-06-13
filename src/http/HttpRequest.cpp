@@ -1,6 +1,5 @@
 // oreshnek/src/http/HttpRequest.cpp
 #include "oreshnek/http/HttpRequest.h"
-#include "oreshnek/json/JsonParser.h" // For parsing JSON body
 #include "oreshnek/utils/Logger.h"
 #include <sstream>
 
@@ -100,7 +99,7 @@ std::optional<std::string_view> HttpRequest::param(std::string_view name) const 
     return std::nullopt;
 }
 
-Json::JsonValue HttpRequest::json() const {
+nlohmann::json HttpRequest::json() const {
     if (body_.empty()) {
         throw std::runtime_error("HTTP Request body is empty, cannot parse JSON.");
     }
@@ -111,7 +110,7 @@ Json::JsonValue HttpRequest::json() const {
         ORE_LOG(WARN) << "Attempting to parse JSON from non-JSON Content-Type: " << *content_type_header;
     }
     
-    return Json::JsonParser::parse(body_);
+    return nlohmann::json::parse(body_.begin(), body_.end());
 }
 
 std::string HttpRequest::to_string() const {

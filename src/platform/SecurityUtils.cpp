@@ -10,8 +10,6 @@
 namespace Oreshnek {
 namespace Platform {
 
-using JsonValue = Oreshnek::Json::JsonValue;
-using JsonParser = Oreshnek::Json::JsonParser;
 
 namespace {
 constexpr char kB64UrlAlphabet[] =
@@ -142,14 +140,14 @@ bool SecurityUtils::verifyPassword(const std::string& password, const std::strin
 
 std::string SecurityUtils::generateJWT(int user_id, const std::string& username,
                                        const std::string& secret) {
-    JsonValue header = JsonValue::object();
-    header["alg"] = JsonValue("HS256");
-    header["typ"] = JsonValue("JWT");
+    nlohmann::json header = nlohmann::json::object();
+    header["alg"] = nlohmann::json("HS256");
+    header["typ"] = nlohmann::json("JWT");
 
-    JsonValue payload = JsonValue::object();
-    payload["user_id"] = JsonValue(user_id);
-    payload["username"] = JsonValue(username);
-    payload["exp"] = JsonValue(static_cast<long long>(
+    nlohmann::json payload = nlohmann::json::object();
+    payload["user_id"] = nlohmann::json(user_id);
+    payload["username"] = nlohmann::json(username);
+    payload["exp"] = nlohmann::json(static_cast<long long>(
         std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count() + 24 * 3600));
 
@@ -170,14 +168,14 @@ bool SecurityUtils::validateJWT(const std::string& token, const std::string& sec
 
     try {
         // 2) Algorithm check: reject "none" / algorithm-confusion attacks.
-        JsonValue header = JsonParser::parse(base64url_decode(parts[0]));
+        nlohmann::json header = nlohmann::json::parse(base64url_decode(parts[0]));
         if (!header.is_object() || !header.contains("alg") || !header["alg"].is_string() ||
             header["alg"].get<std::string>() != "HS256") {
             return false;
         }
 
         // 3) Expiration check (exp is mandatory).
-        JsonValue payload = JsonParser::parse(base64url_decode(parts[1]));
+        nlohmann::json payload = nlohmann::json::parse(base64url_decode(parts[1]));
         if (!payload.is_object() || !payload.contains("exp") || !payload["exp"].is_number()) {
             return false;
         }
@@ -192,16 +190,16 @@ bool SecurityUtils::validateJWT(const std::string& token, const std::string& sec
     return true;
 }
 
-JsonValue SecurityUtils::decodeJWT(const std::string& token) {
+nlohmann::json SecurityUtils::decodeJWT(const std::string& token) {
     std::vector<std::string> parts = split(token, '.');
     if (parts.size() < 2) {
-        return JsonValue();
+        return nlohmann::json();
     }
     try {
-        return JsonParser::parse(base64url_decode(parts[1]));
+        return nlohmann::json::parse(base64url_decode(parts[1]));
     } catch (const std::exception& e) {
         ORE_LOG(WARN) << "Error decoding JWT payload: " << e.what();
-        return JsonValue();
+        return nlohmann::json();
     }
 }
 

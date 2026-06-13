@@ -9,8 +9,7 @@
 #include <openssl/rand.h> // For RAND_bytes
 #include <openssl/evp.h>  // For EVP_sha256, PKCS5_PBKDF2_HMAC
 #include <openssl/hmac.h> // For HMAC
-#include "oreshnek/json/JsonValue.h" // Use project's JSON implementation
-#include "oreshnek/json/JsonParser.h" // For JSON parsing
+#include <nlohmann/json.hpp>
 
 namespace Oreshnek {
 namespace Platform {
@@ -40,7 +39,7 @@ public:
 
     // Decodes the payload of a token. Only meaningful after validateJWT() has
     // returned true for the same token+secret. Returns a null JsonValue on error.
-    static Oreshnek::Json::JsonValue decodeJWT(const std::string& token);
+    static nlohmann::json decodeJWT(const std::string& token);
 
 private:
     static std::string base64url_encode(const std::string& input);

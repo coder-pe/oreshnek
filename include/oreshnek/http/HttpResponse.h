@@ -3,7 +3,7 @@
 #define ORESHNEK_HTTP_HTTPRESPONSE_H
 
 #include "oreshnek/http/HttpEnums.h"
-#include "oreshnek/json/JsonValue.h"
+#include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -53,7 +53,7 @@ public:
     HttpResponse& file(const std::string& file_path, const std::string& content_type = "application/octet-stream");
 
     // Convenience methods for common response types
-    HttpResponse& json(const Json::JsonValue& json_val);
+    HttpResponse& json(const nlohmann::json& json_val);
     HttpResponse& text(const std::string& content);
     HttpResponse& html(const std::string& content);
 

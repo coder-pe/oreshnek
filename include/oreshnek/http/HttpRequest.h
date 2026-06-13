@@ -3,7 +3,7 @@
 #define ORESHNEK_HTTP_HTTPREQUEST_H
 
 #include "oreshnek/http/HttpEnums.h"
-#include "oreshnek/json/JsonValue.h"
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -72,7 +72,7 @@ public:
     std::string_view body() const { return body_; }
 
     // Parse JSON body. Will throw if body is not valid JSON.
-    Json::JsonValue json() const;
+    nlohmann::json json() const;
 
     // For debugging/logging
     std::string to_string() const;

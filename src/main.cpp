@@ -227,7 +227,7 @@ int main() {
             res.header("Content-Type", "application/json"); //
             
             if (req.body().empty()) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Empty body";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -242,7 +242,7 @@ int main() {
             auto role_it = form_data.find("role");
 
             if (username_it == form_data.end() || email_it == form_data.end() || password_it == form_data.end()) { //
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Missing required fields";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -251,7 +251,7 @@ int main() {
 
             // Basic validation (can be enhanced significantly)
             if (username_it->second.empty() || email_it->second.empty() || password_it->second.empty()) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Fields cannot be empty";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -267,7 +267,7 @@ int main() {
 
             // Check if user already exists
             if (g_db_manager->getUserByUsername(new_user.username).id != 0) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "User already exists";
                 res.status(Oreshnek::Http::HttpStatus::CONFLICT).json(error_json);
@@ -279,7 +279,7 @@ int main() {
 
             bool success = g_db_manager->createUser(new_user);
 
-            Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
+            nlohmann::json response_json = nlohmann::json::object();
             response_json["success"] = success;
             response_json["message"] = success ? "User registered successfully" : "Error creating user"; //
             res.json(response_json); //
@@ -290,7 +290,7 @@ int main() {
             res.header("Content-Type", "application/json"); //
 
             if (req.body().empty()) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Empty body";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -302,7 +302,7 @@ int main() {
             auto password_it = form_data.find("password");
 
             if (username_it == form_data.end() || password_it == form_data.end()) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Missing required fields";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -311,7 +311,7 @@ int main() {
 
             Oreshnek::Platform::User user = g_db_manager->getUserByUsername(username_it->second); //
             if (user.id == 0) { // User not found
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "User not found";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -319,7 +319,7 @@ int main() {
             }
 
             if (!Oreshnek::Platform::SecurityUtils::verifyPassword(password_it->second, user.password_hash)) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Incorrect password";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -328,13 +328,13 @@ int main() {
 
             std::string token = Oreshnek::Platform::SecurityUtils::generateJWT(user.id, user.username, g_server_config.jwt_secret); //
 
-            Oreshnek::JsonValue success_response = Oreshnek::JsonValue::object();
+            nlohmann::json success_response = nlohmann::json::object();
             success_response["success"] = true;
-            success_response["token"] = Oreshnek::JsonValue(token);
-            Oreshnek::JsonValue user_json = Oreshnek::JsonValue::object();
-            user_json["id"] = Oreshnek::JsonValue(user.id);
-            user_json["username"] = Oreshnek::JsonValue(user.username);
-            user_json["role"] = Oreshnek::JsonValue(user.role);
+            success_response["token"] = nlohmann::json(token);
+            nlohmann::json user_json = nlohmann::json::object();
+            user_json["id"] = nlohmann::json(user.id);
+            user_json["username"] = nlohmann::json(user.username);
+            user_json["role"] = nlohmann::json(user.role);
             success_response["user"] = user_json;
             
             res.json(success_response); //
@@ -346,7 +346,7 @@ int main() {
 
             auto auth_header = req.header("Authorization"); //
             if (!auth_header) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Authentication token required";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -357,7 +357,7 @@ int main() {
             if (token.length() > 7 && token.substr(0, 7) == "Bearer ") { //
                 token = token.substr(7); //
             } else {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid Authorization header format";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -365,7 +365,7 @@ int main() {
             }
             
             if (!Oreshnek::Platform::SecurityUtils::validateJWT(token, g_server_config.jwt_secret)) { //
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid token";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -373,9 +373,9 @@ int main() {
             }
 
             // Extract user_id from JWT payload
-            Oreshnek::JsonValue jwt_payload = Oreshnek::Platform::SecurityUtils::decodeJWT(token);
+            nlohmann::json jwt_payload = Oreshnek::Platform::SecurityUtils::decodeJWT(token);
             if (jwt_payload.is_null() || !jwt_payload.is_object()) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid token payload";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -387,7 +387,7 @@ int main() {
             try {
                 user_id = jwt_payload["user_id"].get<int>();
             } catch (const std::exception& e) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid token payload - missing user_id";
                 res.status(Oreshnek::Http::HttpStatus::UNAUTHORIZED).json(error_json);
@@ -397,7 +397,7 @@ int main() {
             // Simplified multipart/form-data parsing
             auto content_type_header_opt = req.header("Content-Type");
             if (!content_type_header_opt || content_type_header_opt->find("multipart/form-data") == std::string_view::npos) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Content-Type must be multipart/form-data";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -423,7 +423,7 @@ int main() {
             std::string filename_in_uploads = form_data["video_filename"]; // filename from parse_multipart_form_data
 
             if (title.empty() || filename_in_uploads.empty()) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Missing title or video file (from parsed form data).";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -446,7 +446,7 @@ int main() {
             
             bool success = g_db_manager->createVideo(new_video);
 
-            Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
+            nlohmann::json response_json = nlohmann::json::object();
             response_json["success"] = success; //
             response_json["message"] = success ? "Video uploaded successfully" : "Error uploading video";
             res.json(response_json); //
@@ -474,25 +474,25 @@ int main() {
             }
             
             std::vector<Oreshnek::Platform::Video> videos = g_db_manager->getVideos(limit, offset, category); //
-            Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
+            nlohmann::json response_json = nlohmann::json::object();
             response_json["success"] = true;
-            response_json["videos"] = Oreshnek::JsonValue::array();
+            response_json["videos"] = nlohmann::json::array();
             
             for(const auto& video : videos) { //
-                Oreshnek::JsonValue video_json = Oreshnek::JsonValue::object();
+                nlohmann::json video_json = nlohmann::json::object();
                 video_json["id"] = video.id;
-                video_json["title"] = Oreshnek::JsonValue(video.title);
-                video_json["description"] = Oreshnek::JsonValue(video.description);
-                video_json["category"] = Oreshnek::JsonValue(video.category);
-                Oreshnek::JsonValue tags_array = Oreshnek::JsonValue::array();
+                video_json["title"] = nlohmann::json(video.title);
+                video_json["description"] = nlohmann::json(video.description);
+                video_json["category"] = nlohmann::json(video.category);
+                nlohmann::json tags_array = nlohmann::json::array();
                 for (const auto& tag : video.tags) {
                     tags_array.push_back(tag);
                 }
                 video_json["tags"] = tags_array;
                 video_json["views"] = video.views; //
                 video_json["likes"] = video.likes;
-                video_json["created_at"] = Oreshnek::JsonValue(video.created_at);
-                video_json["duration"] = Oreshnek::JsonValue(video.duration);
+                video_json["created_at"] = nlohmann::json(video.created_at);
+                video_json["duration"] = nlohmann::json(video.duration);
                 response_json["videos"].push_back(video_json);
             }
             
@@ -570,7 +570,7 @@ int main() {
 
             std::optional<std::string_view> id_opt = req.param("id");
             if (!id_opt) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Missing video ID";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -581,7 +581,7 @@ int main() {
             try {
                 video_id = std::stoi(std::string(*id_opt));
             } catch (const std::exception& e) {
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Invalid video ID format";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).json(error_json);
@@ -601,24 +601,24 @@ int main() {
             }
 
             if (found_video.id == 0) { // Video not found
-                Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
+                nlohmann::json error_json = nlohmann::json::object();
                 error_json["success"] = false;
                 error_json["message"] = "Video not found";
                 res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).json(error_json);
                 return;
             }
 
-            Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
+            nlohmann::json response_json = nlohmann::json::object();
             response_json["success"] = true;
-            Oreshnek::JsonValue video_json = Oreshnek::JsonValue::object();
+            nlohmann::json video_json = nlohmann::json::object();
             video_json["id"] = found_video.id;
-            video_json["title"] = Oreshnek::JsonValue(found_video.title);
-            video_json["description"] = Oreshnek::JsonValue(found_video.description);
-            video_json["filename"] = Oreshnek::JsonValue(found_video.filename); // Needed for video player source
+            video_json["title"] = nlohmann::json(found_video.title);
+            video_json["description"] = nlohmann::json(found_video.description);
+            video_json["filename"] = nlohmann::json(found_video.filename); // Needed for video player source
             video_json["views"] = found_video.views;
             video_json["likes"] = found_video.likes;
-            video_json["created_at"] = Oreshnek::JsonValue(found_video.created_at);
-            video_json["duration"] = Oreshnek::JsonValue(found_video.duration);
+            video_json["created_at"] = nlohmann::json(found_video.created_at);
+            video_json["duration"] = nlohmann::json(found_video.duration);
             response_json["video"] = video_json;
             
             res.json(response_json);
