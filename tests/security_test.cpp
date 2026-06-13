@@ -4,7 +4,7 @@
 // HS256 JWT issuance/validation.
 
 #include "oreshnek/platform/SecurityUtils.h"
-#include "oreshnek/json/JsonValue.h"
+#include <nlohmann/json.hpp>
 
 #include <iostream>
 #include <string>

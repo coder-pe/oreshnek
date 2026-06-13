@@ -59,7 +59,7 @@ HttpResponse& HttpResponse::file(const std::string& file_path, const std::string
     return *this;
 }
 
-HttpResponse& HttpResponse::json(const Json::JsonValue& json_val) {
+HttpResponse& HttpResponse::json(const nlohmann::json& json_val) {
     return body(json_val.dump()).header("Content-Type", "application/json");
 }
 
