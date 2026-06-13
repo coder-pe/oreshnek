@@ -435,7 +435,7 @@ int main() {
             // Check if user_id exists in the payload
             int user_id;
             try {
-                user_id = (int)jwt_payload["user_id"].get_number();
+                user_id = jwt_payload["user_id"].get<int>();
             } catch (const std::exception& e) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -536,18 +536,18 @@ int main() {
                 video_json["category"] = Oreshnek::JsonValue(video.category);
                 Oreshnek::JsonValue tags_array = Oreshnek::JsonValue::array();
                 for (const auto& tag : video.tags) {
-                    tags_array.get_array().push_back(Oreshnek::JsonValue(tag));
+                    tags_array.push_back(tag);
                 }
                 video_json["tags"] = tags_array;
                 video_json["views"] = video.views; //
                 video_json["likes"] = video.likes;
                 video_json["created_at"] = Oreshnek::JsonValue(video.created_at);
                 video_json["duration"] = Oreshnek::JsonValue(video.duration);
-                response_json["videos"].get_array().push_back(video_json); //
+                response_json["videos"].push_back(video_json);
             }
             
             // --- DEBUG PRINT: Print the generated JSON to stderr for inspection ---
-            std::cerr << "DEBUG: Sending /api/videos response: " << response_json.to_string() << std::endl;
+            std::cerr << "DEBUG: Sending /api/videos response: " << response_json.dump() << std::endl;
             // --- END DEBUG PRINT ---
 
             res.json(response_json); //

@@ -46,6 +46,20 @@ if(SQLITE3_FOUND)
     message(STATUS "Found SQLite3: ${SQLite3_VERSION}")
 endif()
 
+# nlohmann/json: prefer the vendored single-header (in nlohmann_json/, which is
+# git-ignored), fall back to a system/CMake package. Marked SYSTEM so the
+# header's own code does not trip our -Wall -Wextra -pedantic flags.
+add_library(oreshnek_json INTERFACE)
+set(ORESHNEK_NLOHMANN_SINGLE "${CMAKE_CURRENT_SOURCE_DIR}/nlohmann_json/single_include")
+if(EXISTS "${ORESHNEK_NLOHMANN_SINGLE}/nlohmann/json.hpp")
+    message(STATUS "Found nlohmann/json (vendored single-header)")
+    target_include_directories(oreshnek_json SYSTEM INTERFACE "${ORESHNEK_NLOHMANN_SINGLE}")
+else()
+    find_package(nlohmann_json 3.2 REQUIRED)
+    message(STATUS "Found nlohmann/json (system package)")
+    target_link_libraries(oreshnek_json INTERFACE nlohmann_json::nlohmann_json)
+endif()
+
 # --- Framework library -------------------------------------------------------
 # Everything under src/ except the application entry point (main.cpp).
 file(GLOB_RECURSE ORESHNEK_LIB_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
@@ -57,6 +71,7 @@ target_link_libraries(oreshnek PUBLIC
     Threads::Threads
     OpenSSL::Crypto
     SQLite::SQLite3
+    oreshnek_json
     oreshnek_sanitizers
 )
 target_compile_options(oreshnek PRIVATE -Wall -Wextra -pedantic)

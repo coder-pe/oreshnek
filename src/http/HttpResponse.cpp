@@ -60,7 +60,7 @@ HttpResponse& HttpResponse::file(const std::string& file_path, const std::string
 }
 
 HttpResponse& HttpResponse::json(const Json::JsonValue& json_val) {
-    return body(json_val.to_string()).header("Content-Type", "application/json");
+    return body(json_val.dump()).header("Content-Type", "application/json");
 }
 
 HttpResponse& HttpResponse::text(const std::string& content) {

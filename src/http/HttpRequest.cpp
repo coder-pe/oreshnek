@@ -1,6 +1,7 @@
 // oreshnek/src/http/HttpRequest.cpp
 #include "oreshnek/http/HttpRequest.h"
 #include "oreshnek/json/JsonParser.h" // For parsing JSON body
+#include "oreshnek/utils/Logger.h"
 #include <sstream>
 
 namespace Oreshnek {
@@ -106,10 +107,8 @@ Json::JsonValue HttpRequest::json() const {
     // Check Content-Type header if present
     auto content_type_header = header("Content-Type");
     if (content_type_header && content_type_header->find("application/json") == std::string_view::npos) {
-        // Log a warning, but still attempt to parse if body exists
-        // Or throw an error depending on desired strictness
-        std::cerr << "Warning: Attempting to parse JSON from non-JSON Content-Type: "
-                  << *content_type_header << std::endl;
+        // Log a warning, but still attempt to parse if a body exists.
+        ORE_LOG(WARN) << "Attempting to parse JSON from non-JSON Content-Type: " << *content_type_header;
     }
     
     return Json::JsonParser::parse(body_);

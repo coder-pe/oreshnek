@@ -442,12 +442,14 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
                     handler(*request, res);
                 } catch (const std::exception& e) {
                     ORE_LOG(ERROR) << "Handler exception: " << e.what();
-                    res.status(Http::HttpStatus::INTERNAL_SERVER_ERROR)
-                       .json(Json::JsonValue::object()["error"] = Json::JsonValue("Server error"));
+                    Json::JsonValue err;
+                    err["error"] = "Server error";
+                    res.status(Http::HttpStatus::INTERNAL_SERVER_ERROR).json(err);
                 }
             } else {
-                res.status(Http::HttpStatus::NOT_FOUND)
-                   .json(Json::JsonValue::object()["error"] = Json::JsonValue("Not Found"));
+                Json::JsonValue err;
+                err["error"] = "Not Found";
+                res.status(Http::HttpStatus::NOT_FOUND).json(err);
             }
 
             {
