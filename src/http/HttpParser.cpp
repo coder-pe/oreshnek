@@ -20,6 +20,19 @@ bool HttpParser::parse_request(std::string_view raw_buffer, size_t& bytes_proces
     bytes_processed = 0;
     std::string_view current_data = raw_buffer;
 
+    // Guard against unbounded header blocks (e.g. slowloris / giant headers).
+    // Measure only the header span (up to the blank line), not the whole buffer,
+    // so a large but valid body does not trip the limit.
+    if (state_ == ParsingState::REQUEST_LINE || state_ == ParsingState::HEADERS) {
+        size_t header_end = raw_buffer.find("\r\n\r\n");
+        size_t header_span = (header_end == std::string_view::npos) ? raw_buffer.size() : header_end;
+        if (header_span > MAX_HEADER_BYTES) {
+            state_ = ParsingState::ERROR;
+            error_message_ = "Header block exceeds maximum allowed size";
+            return false;
+        }
+    }
+
     while (state_ != ParsingState::COMPLETE && state_ != ParsingState::ERROR && !current_data.empty()) {
         size_t consumed_bytes_in_step = 0;
         bool step_complete = false;
@@ -159,6 +172,11 @@ bool HttpParser::parse_headers(std::string_view& data, HttpRequest& request) {
                 } catch (const std::exception& e) {
                     state_ = ParsingState::ERROR;
                     error_message_ = "Invalid Content-Length header: " + std::string(*content_length_header);
+                    return false;
+                }
+                if (body_expected_length_ > MAX_BODY_BYTES) {
+                    state_ = ParsingState::ERROR;
+                    error_message_ = "Request body exceeds maximum allowed size";
                     return false;
                 }
             } else {
