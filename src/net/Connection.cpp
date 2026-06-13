@@ -7,6 +7,13 @@
 #include <filesystem> // For file size
 #include "oreshnek/utils/Logger.h"
 
+// Avoid SIGPIPE on writes to a peer that closed the connection. Linux supports
+// the per-call MSG_NOSIGNAL flag; on platforms without it (e.g. macOS) this is a
+// no-op and the SO_NOSIGPIPE socket option / SIG_IGN is relied upon instead.
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 namespace Oreshnek {
 namespace Net {
 
@@ -86,7 +93,7 @@ ssize_t Connection::write_data() {
     if (!headers_sent_) {
         if (!raw_headers_to_send_.empty()) {
             ssize_t header_bytes_to_send = raw_headers_to_send_.length();
-            ssize_t header_bytes_sent = send(socket_fd_, raw_headers_to_send_.c_str(), header_bytes_to_send, 0);
+            ssize_t header_bytes_sent = send(socket_fd_, raw_headers_to_send_.c_str(), header_bytes_to_send, MSG_NOSIGNAL);
 
             if (header_bytes_sent < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -123,7 +130,7 @@ ssize_t Connection::write_data() {
             // This is for string bodies
             std::string& body_str = std::get<std::string>(write_content_);
             if (!body_str.empty()) {
-                ssize_t body_bytes_sent = send(socket_fd_, body_str.c_str(), body_str.length(), 0);
+                ssize_t body_bytes_sent = send(socket_fd_, body_str.c_str(), body_str.length(), MSG_NOSIGNAL);
                 if (body_bytes_sent < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) return bytes_sent_in_call;
                     ORE_LOG(ERROR) << "Error writing string body to socket " << socket_fd_ << ": " << strerror(errno);
@@ -146,7 +153,7 @@ ssize_t Connection::write_data() {
             ssize_t bytes_to_send = file_stream->gcount();
 
             if (bytes_to_send > 0) {
-                ssize_t bytes_sent = send(socket_fd_, buffer.data(), bytes_to_send, 0);
+                ssize_t bytes_sent = send(socket_fd_, buffer.data(), bytes_to_send, MSG_NOSIGNAL);
                 if (bytes_sent > 0) {
                     file_bytes_sent_ += bytes_sent;
                     // If partial send, rewind file stream

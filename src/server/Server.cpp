@@ -386,6 +386,13 @@ void Server::handle_new_connection() {
             continue;
         }
 
+#ifdef SO_NOSIGPIPE
+        // macOS/BSD: suppress SIGPIPE on writes to a closed peer at the socket
+        // level (Linux uses MSG_NOSIGNAL per send() instead).
+        int nosigpipe = 1;
+        setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
+
 #ifdef __linux__
         epoll_event event;
         event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
