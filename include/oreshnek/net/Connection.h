@@ -21,6 +21,10 @@ public:
     static constexpr size_t READ_BUFFER_SIZE = 1024 * 1024; // 1MB
     static constexpr size_t WRITE_BUFFER_CHUNK_SIZE = 4096; // Chunk size for sending file data
 
+    // Sentinel returned by read_data() when the socket has no data right now
+    // (EAGAIN/EWOULDBLOCK) but is still open. Distinct from 0 (peer closed).
+    static constexpr ssize_t kReadWouldBlock = -2;
+
     int socket_fd_;
     std::vector<char> read_buffer_; // Buffer for incoming data
     size_t read_buffer_fill_ = 0; // Current fill level of the read buffer
@@ -41,11 +45,21 @@ public:
     std::chrono::steady_clock::time_point last_activity_;
     bool keep_alive_ = true;
 
+    // True while a request from this connection is being handled by a worker or
+    // its response is still being written. Guards against dispatching more than
+    // one request at a time (preserves HTTP/1.1 response ordering) and against
+    // closing a connection that has work in flight. Touched only by the event loop.
+    bool processing_ = false;
+
     Connection(int fd);
     ~Connection();
 
     // Reset connection for reuse (e.g., in keep-alive scenarios)
     void reset();
+
+    // Clear only the outgoing-response state (headers/body/file stream), leaving
+    // any buffered pipelined request data in read_buffer_ intact.
+    void clear_response_state();
 
     // Read data from socket into read_buffer_. Returns bytes read, 0 if connection closed, -1 on error.
     ssize_t read_data();
@@ -57,9 +71,19 @@ public:
     // Set the content to be written (either a string or a file path)
     void set_response_content(const Http::HttpResponse& response); // Add Http:: prefix
 
-    // Process the read buffer to parse an HTTP request.
-    // Returns true if a complete request is parsed and available in current_request_.
-    bool process_read_buffer();
+    // Try to parse one complete request from the front of read_buffer_ WITHOUT
+    // mutating the buffer. On success, current_request_ holds views into
+    // read_buffer_ and `consumed` is the number of bytes this request occupies.
+    // The caller must take ownership of the request (HttpRequest::make_owned)
+    // and then call consume() before parsing the next one.
+    // Returns false if more data is needed; check parser_failed() for errors.
+    bool parse_next(size_t& consumed);
+
+    // Whether the last parse_next() left the parser in an error state.
+    bool parser_failed() const;
+
+    // Drop `n` bytes from the front of the read buffer.
+    void consume(size_t n);
 
     // Close the socket connection
     void close_connection();

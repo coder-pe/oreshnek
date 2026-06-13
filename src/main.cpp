@@ -15,10 +15,11 @@ Oreshnek::Server::Server* g_server = nullptr;
 Oreshnek::Platform::DatabaseManager* g_db_manager = nullptr; // Global for easy access in handlers
 Oreshnek::Platform::ServerConfig g_server_config; // Global for config access
 
-void signal_handler(int signal) {
+void signal_handler(int /*signal*/) {
+    // Async-signal-safe: only flips an atomic and writes to a pipe. The actual
+    // teardown (stop()) runs on the main thread once run() returns.
     if (g_server) {
-        std::cout << "\nReceived signal " << signal << ", shutting down..." << std::endl;
-        g_server->stop();
+        g_server->request_stop();
     }
 }
 
@@ -643,8 +644,9 @@ int main() {
             return 1;
         }
 
-        // Run server (blocking call)
+        // Run server (blocking call); returns after request_stop().
         server.run();
+        server.stop(); // Graceful teardown on the main thread.
 
     } catch (const std::exception& e) {
         std::cerr << "Server error: " << e.what() << std::endl;

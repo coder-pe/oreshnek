@@ -6,6 +6,72 @@
 namespace Oreshnek {
 namespace Http {
 
+namespace {
+// Repoint a single view from old_base to new_base, preserving its offset/length.
+inline std::string_view shift_view(std::string_view v, const char* old_base, const char* new_base) {
+    if (v.data() == nullptr) return v;
+    return std::string_view(new_base + (v.data() - old_base), v.size());
+}
+// Rebuild a <view,view> map with every key/value repointed.
+inline void shift_map(std::unordered_map<std::string_view, std::string_view>& m,
+                      const char* old_base, const char* new_base) {
+    std::unordered_map<std::string_view, std::string_view> rebuilt;
+    rebuilt.reserve(m.size());
+    for (const auto& [k, v] : m) {
+        rebuilt.emplace(shift_view(k, old_base, new_base), shift_view(v, old_base, new_base));
+    }
+    m = std::move(rebuilt);
+}
+}  // namespace
+
+void HttpRequest::rebase_views(const char* old_base, const char* new_base) {
+    if (old_base == new_base) return;
+    path_ = shift_view(path_, old_base, new_base);
+    version_ = shift_view(version_, old_base, new_base);
+    body_ = shift_view(body_, old_base, new_base);
+    shift_map(headers_, old_base, new_base);
+    shift_map(query_params_, old_base, new_base);
+    // path_params_ keys point at Router-owned storage, not the request buffer,
+    // and are only populated after make_owned(); leave them untouched here.
+}
+
+void HttpRequest::make_owned(const char* base, size_t len) {
+    owned_storage_.assign(base, len);
+    rebase_views(base, owned_storage_.data());
+}
+
+void HttpRequest::copy_from(const HttpRequest& other) {
+    method_ = other.method_;
+    path_ = other.path_;
+    version_ = other.version_;
+    headers_ = other.headers_;
+    query_params_ = other.query_params_;
+    path_params_ = other.path_params_;
+    body_ = other.body_;
+    owned_storage_ = other.owned_storage_;
+    // If the source owned its bytes, our views still point into the source's
+    // buffer; repoint them at our own copy so we don't dangle when it dies.
+    if (!owned_storage_.empty()) {
+        rebase_views(other.owned_storage_.data(), owned_storage_.data());
+    }
+}
+
+void HttpRequest::move_from(HttpRequest&& other) noexcept {
+    const char* old_base = other.owned_storage_.empty() ? nullptr : other.owned_storage_.data();
+    method_ = other.method_;
+    path_ = other.path_;
+    version_ = other.version_;
+    headers_ = std::move(other.headers_);
+    query_params_ = std::move(other.query_params_);
+    path_params_ = std::move(other.path_params_);
+    body_ = other.body_;
+    owned_storage_ = std::move(other.owned_storage_);
+    // std::string move may relocate (SSO); repoint views if the buffer moved.
+    if (old_base != nullptr) {
+        rebase_views(old_base, owned_storage_.data());
+    }
+}
+
 std::optional<std::string_view> HttpRequest::header(std::string_view name) const {
     // For case-insensitive lookup, consider storing keys in a normalized (e.g., lowercase) format
     // or using a case-insensitive string_view comparator for the map.
