@@ -1,16 +1,11 @@
 // oreshnek/src/platform/SecurityUtils.cpp
 #include "oreshnek/platform/SecurityUtils.h"
-#include <algorithm> // For std::replace
-#include <iostream>  // Required for std::cerr [cite: 9]
-
-// Add this declaration for base64_decode.
-// In a real project, this would typically be in a dedicated header or part of a base64 utility class/namespace.
-// For now, we'll declare it here to resolve the compilation error.
-namespace Oreshnek {
-namespace Platform {
-    std::string base64_decode(const std::string& input);
-}
-}
+#include "oreshnek/utils/Logger.h"
+#include <openssl/crypto.h> // For CRYPTO_memcmp
+#include <array>
+#include <cstdint>
+#include <sstream>
+#include <iomanip>
 
 namespace Oreshnek {
 namespace Platform {
@@ -18,103 +13,48 @@ namespace Platform {
 using JsonValue = Oreshnek::Json::JsonValue;
 using JsonParser = Oreshnek::Json::JsonParser;
 
-std::string SecurityUtils::hashPassword(const std::string& password, const std::string& salt) {
-    std::string salted = password + salt;
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, salted.c_str(), salted.size());
-    SHA256_Final(hash, &sha256);
-    
-    std::stringstream ss;
-    for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
-    }
-    return ss.str();
-}
+namespace {
+constexpr char kB64UrlAlphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+}  // namespace
 
-std::string SecurityUtils::generateSalt() {
-    unsigned char salt[16];
-    RAND_bytes(salt, sizeof(salt));
-    std::stringstream ss;
-    for(int i = 0; i < 16; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)salt[i];
-    }
-    return ss.str();
-}
-
-std::string SecurityUtils::generateJWT(int user_id, const std::string& username, const std::string& secret) {
-    JsonValue header = JsonValue::object();
-    header["alg"] = JsonValue("HS256");
-    header["typ"] = JsonValue("JWT");
-    
-    JsonValue payload = JsonValue::object();
-    payload["user_id"] = JsonValue(user_id);
-    payload["username"] = JsonValue(username);
-    payload["exp"] = JsonValue(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() + 24*3600);
-
-    std::string header_str = base64_encode(header.to_string());
-    std::string payload_str = base64_encode(payload.to_string());
-    
-    std::string signature = hmac_sha256(header_str + "." + payload_str, secret);
-    return header_str + "." + payload_str + "." + signature;
-}
-
-bool SecurityUtils::validateJWT(const std::string& token, const std::string& secret) {
-    std::vector<std::string> parts = split(token, '.');
-    if(parts.size() != 3) return false;
-    
-    std::string expected_signature = hmac_sha256(parts[0] + "." + parts[1], secret);
-    return parts[2] == expected_signature;
-}
-
-JsonValue SecurityUtils::decodeJWT(const std::string& token) {
-    std::vector<std::string> parts = split(token, '.');
-    if (parts.size() < 2) {
-        return JsonValue(); // Invalid JWT format - return null JsonValue
-    }
-    try {
-        std::string decoded_payload = base64_decode(parts[1]); // Calls the newly declared base64_decode
-        return JsonParser::parse(decoded_payload);
-    } catch (const std::exception& e) {
-        std::cerr << "Error decoding JWT payload: " << e.what() << std::endl;
-        return JsonValue(); // Return null JsonValue on error
-    }
-}
-
-// Private helper functions for base64 and hmac_sha256
-std::string SecurityUtils::base64_encode(const std::string& input) {
-    // This is a simplified base64_encode. For production, use a more robust library.
-    const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+std::string SecurityUtils::base64url_encode(const std::string& input) {
     std::string encoded;
     int val = 0, valb = -6;
-    for(unsigned char c : input) {
+    for (unsigned char c : input) {
         val = (val << 8) + c;
         valb += 8;
-        while(valb >= 0) {
-            encoded.push_back(chars[(val >> valb) & 0x3F]);
+        while (valb >= 0) {
+            encoded.push_back(kB64UrlAlphabet[(val >> valb) & 0x3F]);
             valb -= 6;
         }
     }
-    if(valb > -6) encoded.push_back(chars[((val << 8) >> (valb + 8)) & 0x3F]);
-    while(encoded.size() % 4) encoded.push_back('=');
+    if (valb > -6) {
+        encoded.push_back(kB64UrlAlphabet[((val << 8) >> (valb + 8)) & 0x3F]);
+    }
+    // base64url omits '=' padding.
     return encoded;
 }
 
-// You will need a base64_decode for decodeJWT. Here's a basic one:
-// This function needs to be defined in the Oreshnek::Platform namespace
-std::string base64_decode(const std::string& input) { // Now correctly part of Oreshnek::Platform
-    // This is a simplified base64_decode. For production, use a more robust library.
-    // This implementation is a placeholder and may not handle all edge cases or padding correctly.
-    const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-    std::string decoded;
-    std::vector<int> T(256, -1);
-    for (int i = 0; i < 64; i++) T[chars[i]] = i;
+std::string SecurityUtils::base64url_decode(const std::string& input) {
+    // Build the reverse lookup table once. Index with unsigned char to avoid the
+    // signed-char negative-index UB that the previous implementation had.
+    static const std::array<int8_t, 256> table = [] {
+        std::array<int8_t, 256> t{};
+        t.fill(-1);
+        for (int i = 0; i < 64; ++i) {
+            t[static_cast<unsigned char>(kB64UrlAlphabet[i])] = static_cast<int8_t>(i);
+        }
+        return t;
+    }();
 
+    std::string decoded;
     int val = 0, valb = -8;
-    for (char c : input) {
-        if (T[c] == -1) break; // Add check for invalid characters
-        val = (val << 6) + T[c];
+    for (unsigned char c : input) {
+        if (c == '=') break; // tolerate accidental padding
+        int8_t d = table[c];
+        if (d == -1) break;  // stop at first invalid character
+        val = (val << 6) + d;
         valb += 6;
         if (valb >= 0) {
             decoded.push_back(static_cast<char>((val >> valb) & 0xFF));
@@ -124,29 +64,158 @@ std::string base64_decode(const std::string& input) { // Now correctly part of O
     return decoded;
 }
 
+std::string SecurityUtils::hmac_sha256_raw(const std::string& data, const std::string& key) {
+    unsigned char out[EVP_MAX_MD_SIZE];
+    unsigned int out_len = 0;
+    HMAC(EVP_sha256(),
+         key.data(), static_cast<int>(key.size()),
+         reinterpret_cast<const unsigned char*>(data.data()), data.size(),
+         out, &out_len);
+    return std::string(reinterpret_cast<char*>(out), out_len);
+}
 
-std::string SecurityUtils::hmac_sha256(const std::string& data, const std::string& key) {
-    unsigned char* digest;
-    unsigned int len = SHA256_DIGEST_LENGTH; // Correct length for SHA256
-    
-    // HMAC is deprecated in OpenSSL 3.0, but for now we'll cast to suppress the error.
-    // A proper solution would involve updating to the new OpenSSL 3.0 API if available,
-    // or using a different hashing library.
-    digest = HMAC(EVP_sha256(), key.c_str(), static_cast<int>(key.length()), 
-                 reinterpret_cast<const unsigned char*>(data.c_str()), static_cast<int>(data.length()), NULL, &len);
-    
-    std::stringstream ss;
-    for(unsigned int i = 0; i < len; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(digest[i]);
+bool SecurityUtils::constant_time_equals(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    return CRYPTO_memcmp(a.data(), b.data(), a.size()) == 0;
+}
+
+std::string SecurityUtils::generateSalt() {
+    unsigned char salt[kSaltLength];
+    RAND_bytes(salt, sizeof(salt));
+    std::ostringstream ss;
+    for (unsigned char b : salt) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(b);
     }
     return ss.str();
+}
+
+std::string SecurityUtils::hashPassword(const std::string& password) {
+    unsigned char salt[kSaltLength];
+    if (RAND_bytes(salt, sizeof(salt)) != 1) {
+        throw std::runtime_error("RAND_bytes failed while hashing password");
+    }
+
+    unsigned char hash[kHashLength];
+    if (PKCS5_PBKDF2_HMAC(password.data(), static_cast<int>(password.size()),
+                          salt, sizeof(salt), kPbkdf2Iterations, EVP_sha256(),
+                          sizeof(hash), hash) != 1) {
+        throw std::runtime_error("PBKDF2 derivation failed");
+    }
+
+    // Self-contained PHC-like format: pbkdf2_sha256$<iter>$<salt_b64url>$<hash_b64url>
+    std::ostringstream out;
+    out << "pbkdf2_sha256$" << kPbkdf2Iterations << '$'
+        << base64url_encode(std::string(reinterpret_cast<char*>(salt), sizeof(salt))) << '$'
+        << base64url_encode(std::string(reinterpret_cast<char*>(hash), sizeof(hash)));
+    return out.str();
+}
+
+bool SecurityUtils::verifyPassword(const std::string& password, const std::string& stored) {
+    std::vector<std::string> parts = split(stored, '$');
+    if (parts.size() != 4 || parts[0] != "pbkdf2_sha256") {
+        return false;
+    }
+
+    int iterations = 0;
+    try {
+        iterations = std::stoi(parts[1]);
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (iterations <= 0) return false;
+
+    std::string salt = base64url_decode(parts[2]);
+    std::string expected = base64url_decode(parts[3]);
+    if (salt.empty() || expected.empty()) return false;
+
+    std::vector<unsigned char> computed(expected.size());
+    if (PKCS5_PBKDF2_HMAC(password.data(), static_cast<int>(password.size()),
+                          reinterpret_cast<const unsigned char*>(salt.data()),
+                          static_cast<int>(salt.size()), iterations, EVP_sha256(),
+                          static_cast<int>(computed.size()), computed.data()) != 1) {
+        return false;
+    }
+
+    return constant_time_equals(
+        expected, std::string(reinterpret_cast<char*>(computed.data()), computed.size()));
+}
+
+std::string SecurityUtils::generateJWT(int user_id, const std::string& username,
+                                       const std::string& secret) {
+    JsonValue header = JsonValue::object();
+    header["alg"] = JsonValue("HS256");
+    header["typ"] = JsonValue("JWT");
+
+    JsonValue payload = JsonValue::object();
+    payload["user_id"] = JsonValue(user_id);
+    payload["username"] = JsonValue(username);
+    payload["exp"] = JsonValue(static_cast<long long>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count() + 24 * 3600));
+
+    std::string signing_input =
+        base64url_encode(header.to_string()) + "." + base64url_encode(payload.to_string());
+    std::string signature = base64url_encode(hmac_sha256_raw(signing_input, secret));
+    return signing_input + "." + signature;
+}
+
+bool SecurityUtils::validateJWT(const std::string& token, const std::string& secret) {
+    std::vector<std::string> parts = split(token, '.');
+    if (parts.size() != 3) return false;
+
+    // 1) Signature check (constant time) over "header.payload".
+    std::string expected_sig = hmac_sha256_raw(parts[0] + "." + parts[1], secret);
+    std::string actual_sig = base64url_decode(parts[2]);
+    if (!constant_time_equals(actual_sig, expected_sig)) return false;
+
+    try {
+        // 2) Algorithm check: reject "none" / algorithm-confusion attacks.
+        JsonValue header = JsonParser::parse(base64url_decode(parts[0]));
+        if (!header.is_object()) return false;
+        const auto& hobj = header.get_object();
+        auto alg_it = hobj.find("alg");
+        if (alg_it == hobj.end() || !alg_it->second.is_string() ||
+            alg_it->second.get_string() != "HS256") {
+            return false;
+        }
+
+        // 3) Expiration check.
+        JsonValue payload = JsonParser::parse(base64url_decode(parts[1]));
+        if (!payload.is_object()) return false;
+        const auto& pobj = payload.get_object();
+        auto exp_it = pobj.find("exp");
+        if (exp_it == pobj.end() || !exp_it->second.is_number()) {
+            return false; // exp is mandatory.
+        }
+        auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch()).count();
+        if (static_cast<long long>(exp_it->second.get_number()) <= now) {
+            return false; // Expired.
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
+}
+
+JsonValue SecurityUtils::decodeJWT(const std::string& token) {
+    std::vector<std::string> parts = split(token, '.');
+    if (parts.size() < 2) {
+        return JsonValue();
+    }
+    try {
+        return JsonParser::parse(base64url_decode(parts[1]));
+    } catch (const std::exception& e) {
+        ORE_LOG(WARN) << "Error decoding JWT payload: " << e.what();
+        return JsonValue();
+    }
 }
 
 std::vector<std::string> SecurityUtils::split(const std::string& str, char delimiter) {
     std::vector<std::string> tokens;
     std::string token;
-    std::istringstream tokenStream(str);
-    while(std::getline(tokenStream, token, delimiter)) {
+    std::istringstream stream(str);
+    while (std::getline(stream, token, delimiter)) {
         tokens.push_back(token);
     }
     return tokens;

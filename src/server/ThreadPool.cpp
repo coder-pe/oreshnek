@@ -1,5 +1,6 @@
 // oreshnek/src/server/ThreadPool.cpp
 #include "oreshnek/server/ThreadPool.h"
+#include "oreshnek/utils/Logger.h"
 #include <iostream> // For debugging
 
 namespace Oreshnek {
@@ -45,7 +46,7 @@ void ThreadPool::shutdown() {
             worker.join(); // Wait for each thread to finish
         }
     }
-    std::cout << "ThreadPool shutdown complete." << std::endl;
+    ORE_LOG(INFO) << "ThreadPool shutdown complete.";
 }
 
 } // namespace Server

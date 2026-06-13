@@ -9,16 +9,18 @@
 #include <filesystem> // For creating directories
 #include <fstream> // For file operations
 #include <random> // For file naming
+#include <optional> // For std::optional
 
 // Global server instance for signal handling
 Oreshnek::Server::Server* g_server = nullptr;
 Oreshnek::Platform::DatabaseManager* g_db_manager = nullptr; // Global for easy access in handlers
 Oreshnek::Platform::ServerConfig g_server_config; // Global for config access
 
-void signal_handler(int signal) {
+void signal_handler(int /*signal*/) {
+    // Async-signal-safe: only flips an atomic and writes to a pipe. The actual
+    // teardown (stop()) runs on the main thread once run() returns.
     if (g_server) {
-        std::cout << "\nReceived signal " << signal << ", shutting down..." << std::endl;
-        g_server->stop();
+        g_server->request_stop();
     }
 }
 
@@ -163,7 +165,36 @@ std::unordered_map<std::string, std::string> parse_form_urlencoded(const std::st
 }
 
 
+// Safely resolve a user-supplied relative path inside base_dir, rejecting any
+// path that escapes it via "..", absolute paths or symlinks (directory
+// traversal). Returns std::nullopt if the path escapes base_dir.
+std::optional<std::string> resolve_within_dir(const std::string& base_dir,
+                                              const std::string& relative) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path base = fs::weakly_canonical(fs::absolute(base_dir), ec);
+    if (ec) return std::nullopt;
+    fs::path target = fs::weakly_canonical(fs::absolute(base_dir) / relative, ec);
+    if (ec) return std::nullopt;
+
+    const std::string base_str = base.string();
+    const std::string target_str = target.string();
+    // target must be base itself or live strictly under base/ (with a separator
+    // at the boundary, so "/static" does not match "/staticX").
+    if (target_str.compare(0, base_str.size(), base_str) != 0) {
+        return std::nullopt;
+    }
+    if (target_str.size() > base_str.size() &&
+        target_str[base_str.size()] != static_cast<char>(fs::path::preferred_separator)) {
+        return std::nullopt;
+    }
+    return target_str;
+}
+
 int main() {
+    // Writing to a socket whose peer has closed would otherwise raise SIGPIPE and
+    // terminate the process; ignore it and rely on send()/EPIPE error handling.
+    signal(SIGPIPE, SIG_IGN);
     try {
         // Initialize ServerConfig
         // You can load this from a file later (e.g., JSON, TOML)
@@ -201,8 +232,13 @@ int main() {
                 return;
             }
             std::string relative_path = std::string(*file_path_opt);
-            std::string file_path = g_server_config.static_dir + relative_path;
-            std::cerr << "DEBUG: Request for static file: " << file_path << "\n";
+            std::optional<std::string> resolved =
+                resolve_within_dir(g_server_config.static_dir, relative_path);
+            if (!resolved) {
+                res.status(Oreshnek::Http::HttpStatus::FORBIDDEN).text("Forbidden");
+                return;
+            }
+            std::string file_path = *resolved;
 
             if (!std::filesystem::exists(file_path)) {
                 std::cerr << "DEBUG: Static file not found: " << file_path << "\n";
@@ -288,8 +324,8 @@ int main() {
                 return;
             }
 
-            std::string salt = "default_salt"; // Replace with dynamically generated salt in a real app
-            new_user.password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt);
+            // PBKDF2 hash with a per-user random salt embedded in the stored string.
+            new_user.password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second);
 
             bool success = g_db_manager->createUser(new_user);
 
@@ -332,11 +368,7 @@ int main() {
                 return;
             }
 
-            // In a real implementation, store salt with user and retrieve it here.
-            std::string salt = "default_salt"; //
-            std::string password_hash = Oreshnek::Platform::SecurityUtils::hashPassword(password_it->second, salt); //
-
-            if (password_hash != user.password_hash) {
+            if (!Oreshnek::Platform::SecurityUtils::verifyPassword(password_it->second, user.password_hash)) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
                 error_json["message"] = "Incorrect password";
@@ -528,7 +560,13 @@ int main() {
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).text("Missing video filename");
                 return;
             }
-            std::string video_path = g_server_config.upload_dir + std::string(*filename_opt); //
+            std::optional<std::string> resolved_video =
+                resolve_within_dir(g_server_config.upload_dir, std::string(*filename_opt));
+            if (!resolved_video) {
+                res.status(Oreshnek::Http::HttpStatus::FORBIDDEN).text("Forbidden");
+                return;
+            }
+            std::string video_path = *resolved_video;
 
             if (!std::filesystem::exists(video_path) || std::filesystem::is_directory(video_path)) {
                 res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).text("Video not found"); //
@@ -643,8 +681,9 @@ int main() {
             return 1;
         }
 
-        // Run server (blocking call)
+        // Run server (blocking call); returns after request_stop().
         server.run();
+        server.stop(); // Graceful teardown on the main thread.
 
     } catch (const std::exception& e) {
         std::cerr << "Server error: " << e.what() << std::endl;

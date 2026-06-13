@@ -1,13 +1,16 @@
 // oreshnek/src/server/Server.cpp
 #include "oreshnek/server/Server.h"
+#include "oreshnek/utils/Logger.h"
 #include <iostream>
 #include <fcntl.h>    // For fcntl
-#include <unistd.h>   // For close
+#include <unistd.h>   // For close, pipe, read, write
 #include <sys/socket.h> // For socket, bind, listen, accept
 #include <netinet/in.h> // For sockaddr_in
 #include <arpa/inet.h>  // For inet_ntoa
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
+#include <vector>     // For cleanup_expired_connections
+#include <utility>    // For std::swap
 
 // Platform specific includes
 #ifdef __linux__
@@ -15,7 +18,6 @@
 #include <sys/epoll.h>
 #elif __APPLE__
 #include <sys/event.h>
-// For macOS sendfile equivalent, we'll use standard read/write
 #endif
 #include <sys/stat.h> // For stat (to get file size and check existence)
 
@@ -23,9 +25,9 @@ namespace Oreshnek {
 namespace Server {
 
 Server::Server(size_t worker_threads)
-    : listen_fd_(-1), 
+    : listen_fd_(-1),
 #ifdef __linux__
-      epoll_fd_(-1), 
+      epoll_fd_(-1),
 #elif __APPLE__
       kqueue_fd_(-1),
 #endif
@@ -43,7 +45,6 @@ void Server::set_non_blocking(int fd) {
     if (flags == -1) {
         throw std::runtime_error("fcntl F_GETFL failed: " + std::string(strerror(errno)));
     }
-
     if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
         throw std::runtime_error("fcntl F_SETFL failed: " + std::string(strerror(errno)));
     }
@@ -52,74 +53,67 @@ void Server::set_non_blocking(int fd) {
 bool Server::setup_socket(const std::string& host, int port) {
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
-        std::cerr << "Failed to create socket: " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to create socket: " << strerror(errno);
         return false;
     }
 
     int opt = 1;
-    // Enable address reuse
     if (setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        std::cerr << "Failed to set SO_REUSEADDR: " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to set SO_REUSEADDR: " << strerror(errno);
         close(listen_fd_);
         return false;
     }
-
-    // Enable keepalive - can be useful for long-lived connections
     if (setsockopt(listen_fd_, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt)) < 0) {
-        std::cerr << "Failed to set SO_KEEPALIVE: " << strerror(errno) << std::endl;
-    } // Not critical, so not returning false
+        ORE_LOG(ERROR) << "Failed to set SO_KEEPALIVE: " << strerror(errno);
+    }
 
-    // Set non-blocking mode for the listening socket
     try {
         set_non_blocking(listen_fd_);
     } catch (const std::runtime_error& e) {
-        std::cerr << "Failed to set listen socket non-blocking: " << e.what() << std::endl;
+        ORE_LOG(ERROR) << "Failed to set listen socket non-blocking: " << e.what();
         close(listen_fd_);
         return false;
     }
 
     sockaddr_in addr;
+    std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     if (host == "0.0.0.0") {
         addr.sin_addr.s_addr = INADDR_ANY;
-    } else {
-        if (inet_pton(AF_INET, host.c_str(), &(addr.sin_addr)) <= 0) {
-            std::cerr << "Invalid host address: " << host << std::endl;
-            close(listen_fd_);
-            return false;
-        }
+    } else if (inet_pton(AF_INET, host.c_str(), &(addr.sin_addr)) <= 0) {
+        ORE_LOG(ERROR) << "Invalid host address: " << host;
+        close(listen_fd_);
+        return false;
     }
 
     if (bind(listen_fd_, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "Failed to bind socket to " << host << ":" << port << ": " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to bind socket to " << host << ":" << port << ": " << strerror(errno);
+        close(listen_fd_);
+        return false;
+    }
+    if (::listen(listen_fd_, BACKLOG) < 0) {
+        ORE_LOG(ERROR) << "Failed to listen on socket: " << strerror(errno);
         close(listen_fd_);
         return false;
     }
 
-    if (::listen(listen_fd_, BACKLOG) < 0) { // Use '::' to explicitly call the global listen function
-        std::cerr << "Failed to listen on socket: " << strerror(errno) << std::endl;
-        close(listen_fd_);
-        return false;
-    }
-
-    std::cout << "Server listening on " << host << ":" << port << std::endl;
+    ORE_LOG(INFO) << "Server listening on " << host << ":" << port;
     return true;
 }
 
 #ifdef __linux__
 bool Server::setup_epoll() {
-    epoll_fd_ = epoll_create1(0); // 0 for flags, not deprecated
+    epoll_fd_ = epoll_create1(0);
     if (epoll_fd_ < 0) {
-        std::cerr << "Failed to create epoll instance: " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to create epoll instance: " << strerror(errno);
         return false;
     }
-
     epoll_event event;
-    event.events = EPOLLIN | EPOLLET; // Edge-triggered for listen socket
+    event.events = EPOLLIN | EPOLLET;
     event.data.fd = listen_fd_;
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, listen_fd_, &event) < 0) {
-        std::cerr << "Failed to add listen socket to epoll: " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to add listen socket to epoll: " << strerror(errno);
         close(epoll_fd_);
         return false;
     }
@@ -129,21 +123,52 @@ bool Server::setup_epoll() {
 bool Server::setup_kqueue() {
     kqueue_fd_ = kqueue();
     if (kqueue_fd_ < 0) {
-        std::cerr << "Failed to create kqueue instance: " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to create kqueue instance: " << strerror(errno);
         return false;
     }
-
     struct kevent change_event;
     EV_SET(&change_event, listen_fd_, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-    
     if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
-        std::cerr << "Failed to add listen socket to kqueue: " << strerror(errno) << std::endl;
+        ORE_LOG(ERROR) << "Failed to add listen socket to kqueue: " << strerror(errno);
         close(kqueue_fd_);
         return false;
     }
     return true;
 }
 #endif
+
+bool Server::setup_wakeup() {
+    if (pipe(wakeup_pipe_) < 0) {
+        ORE_LOG(ERROR) << "Failed to create wakeup pipe: " << strerror(errno);
+        return false;
+    }
+    try {
+        set_non_blocking(wakeup_pipe_[0]);
+        set_non_blocking(wakeup_pipe_[1]);
+    } catch (const std::runtime_error& e) {
+        ORE_LOG(ERROR) << "Failed to set wakeup pipe non-blocking: " << e.what();
+        return false;
+    }
+
+    // Register the read end as a persistent, level/edge-triggered source.
+#ifdef __linux__
+    epoll_event event;
+    event.events = EPOLLIN | EPOLLET;
+    event.data.fd = wakeup_pipe_[0];
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, wakeup_pipe_[0], &event) < 0) {
+        ORE_LOG(ERROR) << "Failed to add wakeup pipe to epoll: " << strerror(errno);
+        return false;
+    }
+#elif __APPLE__
+    struct kevent change_event;
+    EV_SET(&change_event, wakeup_pipe_[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+        ORE_LOG(ERROR) << "Failed to add wakeup pipe to kqueue: " << strerror(errno);
+        return false;
+    }
+#endif
+    return true;
+}
 
 bool Server::listen(const std::string& host, int port) {
     if (!setup_socket(host, port)) {
@@ -160,7 +185,79 @@ bool Server::listen(const std::string& host, int port) {
         return false;
     }
 #endif
+    if (!setup_wakeup()) {
+        return false;
+    }
     running_ = true;
+    return true;
+}
+
+// Async-signal-safe: only writes to an atomic and a pipe (both safe).
+void Server::request_stop() {
+    running_.store(false, std::memory_order_relaxed);
+    notify_event_loop();
+}
+
+void Server::notify_event_loop() {
+    if (wakeup_pipe_[1] < 0) return;
+    const char byte = 1;
+    // Best-effort: a full pipe already means "wake up", so ignore EAGAIN/EINTR.
+    ssize_t n;
+    do {
+        n = write(wakeup_pipe_[1], &byte, 1);
+    } while (n < 0 && errno == EINTR);
+}
+
+void Server::drain_wakeup() {
+    char buf[256];
+    while (read(wakeup_pipe_[0], buf, sizeof(buf)) > 0) {
+        // discard
+    }
+}
+
+void Server::process_completions() {
+    std::queue<CompletedResponse> ready;
+    {
+        std::lock_guard<std::mutex> lock(completed_mutex_);
+        std::swap(ready, completed_);
+    }
+
+    while (!ready.empty()) {
+        CompletedResponse item = std::move(ready.front());
+        ready.pop();
+
+        // Verify the connection is still the live owner of this fd (guard
+        // against close + fd reuse while the worker was running).
+        auto it = connections_.find(item.fd);
+        if (it == connections_.end() || it->second != item.conn || !item.conn->is_open()) {
+            continue; // Connection went away; drop the response.
+        }
+
+        item.conn->set_response_content(item.response);
+        rearm(item.fd, /*read=*/false); // Closes the connection on failure.
+    }
+}
+
+bool Server::rearm(int fd, bool read) {
+#ifdef __linux__
+    epoll_event event;
+    event.events = (read ? EPOLLIN : EPOLLOUT) | EPOLLET | EPOLLONESHOT;
+    event.data.fd = fd;
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
+        ORE_LOG(ERROR) << "Failed to re-arm fd " << fd << ": " << strerror(errno);
+        close_connection(fd);
+        return false;
+    }
+#elif __APPLE__
+    struct kevent change_event;
+    EV_SET(&change_event, fd, read ? EVFILT_READ : EVFILT_WRITE,
+           EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
+    if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
+        ORE_LOG(ERROR) << "Failed to re-arm fd " << fd << ": " << strerror(errno);
+        close_connection(fd);
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -172,85 +269,63 @@ void Server::run() {
 #endif
     auto last_cleanup = std::chrono::steady_clock::now();
 
-    while (running_) {
+    while (running_.load(std::memory_order_relaxed)) {
 #ifdef __linux__
-        int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, 1000); // 1-second timeout
+        int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, 1000);
 #elif __APPLE__
-        struct timespec timeout;
-        timeout.tv_sec = 1;
-        timeout.tv_nsec = 0;
+        struct timespec timeout{1, 0};
         int num_events = kevent(kqueue_fd_, NULL, 0, events, MAX_EVENTS, &timeout);
 #endif
-
         if (num_events < 0) {
-            if (errno == EINTR) {
-                continue; // Interrupted by signal
-            }
+            if (errno == EINTR) continue;
 #ifdef __linux__
-            std::cerr << "epoll_wait failed: " << strerror(errno) << std::endl;
+            ORE_LOG(ERROR) << "epoll_wait failed: " << strerror(errno);
 #elif __APPLE__
-            std::cerr << "kevent failed: " << strerror(errno) << std::endl;
+            ORE_LOG(ERROR) << "kevent failed: " << strerror(errno);
 #endif
-            running_ = false; // Critical error, stop server
+            running_.store(false, std::memory_order_relaxed);
             break;
         }
 
         for (int i = 0; i < num_events; ++i) {
 #ifdef __linux__
             int fd = events[i].data.fd;
-            uint32_t event_flags = events[i].events;
+            uint32_t flags = events[i].events;
 
-            if (fd == listen_fd_) {
-                // New connection
-                if (event_flags & EPOLLIN) { // Ensure it's a read event
-                    handle_new_connection();
-                }
+            if (fd == wakeup_pipe_[0]) {
+                drain_wakeup();
+                process_completions();
+            } else if (fd == listen_fd_) {
+                if (flags & EPOLLIN) handle_new_connection();
             } else {
-                // Existing client connection
-                // Read events
-                if (event_flags & EPOLLIN) {
-                    handle_client_data(fd);
-                }
-                // Write events
-                if (event_flags & EPOLLOUT) {
-                    handle_write_ready(fd);
-                }
-                // Error events
-                if ((event_flags & EPOLLERR) || (event_flags & EPOLLHUP)) {
-                    std::cerr << "Epoll error or hangup on fd " << fd << std::endl;
+                if ((flags & EPOLLERR) || (flags & EPOLLHUP)) {
                     close_connection(fd);
+                    continue;
                 }
+                if (flags & EPOLLIN)  handle_client_data(fd);
+                if (flags & EPOLLOUT) handle_write_ready(fd);
             }
 #elif __APPLE__
             int fd = (int)events[i].ident;
-            int16_t event_filter = events[i].filter;
-            uint16_t event_flags = events[i].flags;
+            int16_t filter = events[i].filter;
+            uint16_t flags = events[i].flags;
 
-            if (fd == listen_fd_) {
-                // New connection
-                if (event_filter == EVFILT_READ) { // kqueue read event
-                    handle_new_connection();
-                }
+            if (fd == wakeup_pipe_[0]) {
+                drain_wakeup();
+                process_completions();
+            } else if (fd == listen_fd_) {
+                if (filter == EVFILT_READ) handle_new_connection();
             } else {
-                // Existing client connection
-                // Read events
-                if (event_filter == EVFILT_READ) {
-                    handle_client_data(fd);
-                }
-                // Write events
-                if (event_filter == EVFILT_WRITE) {
-                    handle_write_ready(fd);
-                }
-                // Error handling for kqueue would be different
-                if (event_flags & EV_EOF) {
-                    std::cerr << "Kqueue EOF on fd " << fd << std::endl;
+                if (filter == EVFILT_READ)  handle_client_data(fd);
+                if (filter == EVFILT_WRITE) handle_write_ready(fd);
+                if (flags & EV_EOF) {
+                    // Only close once any pending readable data has been handled.
                     close_connection(fd);
                 }
             }
 #endif
         }
 
-        // Periodic cleanup of expired connections (e.g., every 30 seconds)
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_cleanup).count() > 30) {
             cleanup_expired_connections();
@@ -258,39 +333,43 @@ void Server::run() {
         }
     }
 
-    std::cout << "Server main loop stopped." << std::endl;
+    // Tear down resources owned by the event-loop thread *on this thread*, so a
+    // concurrent stop()/destructor on the owner thread never races us on the
+    // connection map or the multiplexer fd. The owner is expected to join this
+    // thread after calling request_stop().
+    connections_.clear();
+#ifdef __linux__
+    if (epoll_fd_ >= 0) { close(epoll_fd_); epoll_fd_ = -1; }
+#elif __APPLE__
+    if (kqueue_fd_ >= 0) { close(kqueue_fd_); kqueue_fd_ = -1; }
+#endif
+    if (listen_fd_ >= 0) { close(listen_fd_); listen_fd_ = -1; }
+
+    ORE_LOG(INFO) << "Server main loop stopped.";
 }
 
 void Server::stop() {
-    running_ = false;
-    thread_pool_->shutdown(); // Shutdown worker threads
-
-    // Close all client connections
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        for (auto& pair : connections_) {
-            pair.second->close_connection();
-        }
-        connections_.clear();
+    // Signal the loop and tear down the worker pool. The event-loop thread tears
+    // down its own connections/fds in run(); the caller must have joined it (or
+    // never started it) before this completes. We only touch state here that is
+    // not concurrently used once the loop has exited and workers are joined.
+    request_stop();
+    if (thread_pool_) {
+        thread_pool_->shutdown(); // Joins worker threads.
     }
 
-    // Close server sockets and event loop instance
+    // Cover the "run() was never started" path; no-ops if run() already cleaned up.
+    connections_.clear();
 #ifdef __linux__
-    if (epoll_fd_ >= 0) {
-        close(epoll_fd_);
-        epoll_fd_ = -1;
-    }
+    if (epoll_fd_ >= 0) { close(epoll_fd_); epoll_fd_ = -1; }
 #elif __APPLE__
-    if (kqueue_fd_ >= 0) {
-        close(kqueue_fd_);
-        kqueue_fd_ = -1;
-    }
+    if (kqueue_fd_ >= 0) { close(kqueue_fd_); kqueue_fd_ = -1; }
 #endif
-    if (listen_fd_ >= 0) {
-        close(listen_fd_);
-        listen_fd_ = -1;
-    }
-    std::cout << "Server fully stopped." << std::endl;
+    if (listen_fd_ >= 0) { close(listen_fd_); listen_fd_ = -1; }
+    // Safe to close now: all workers are joined, so no one can call notify_event_loop().
+    if (wakeup_pipe_[0] >= 0) { close(wakeup_pipe_[0]); wakeup_pipe_[0] = -1; }
+    if (wakeup_pipe_[1] >= 0) { close(wakeup_pipe_[1]); wakeup_pipe_[1] = -1; }
+    ORE_LOG(INFO) << "Server fully stopped.";
 }
 
 void Server::handle_new_connection() {
@@ -298,25 +377,28 @@ void Server::handle_new_connection() {
     socklen_t client_len = sizeof(client_addr);
     int client_fd;
 
-    // Accept all pending connections in edge-triggered mode
     while ((client_fd = accept(listen_fd_, (sockaddr*)&client_addr, &client_len)) >= 0) {
-        std::cout << "Accepted new connection from " << inet_ntoa(client_addr.sin_addr)
-                  << ":" << ntohs(client_addr.sin_port) << " on fd " << client_fd << std::endl;
-
         try {
             set_non_blocking(client_fd);
         } catch (const std::runtime_error& e) {
-            std::cerr << "Failed to set client socket non-blocking: " << e.what() << std::endl;
+            ORE_LOG(ERROR) << "Failed to set client socket non-blocking: " << e.what();
             close(client_fd);
             continue;
         }
 
+#ifdef SO_NOSIGPIPE
+        // macOS/BSD: suppress SIGPIPE on writes to a closed peer at the socket
+        // level (Linux uses MSG_NOSIGNAL per send() instead).
+        int nosigpipe = 1;
+        setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
+
 #ifdef __linux__
         epoll_event event;
-        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; 
+        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
         event.data.fd = client_fd;
         if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &event) < 0) {
-            std::cerr << "Failed to add client socket to epoll: " << strerror(errno) << std::endl;
+            ORE_LOG(ERROR) << "Failed to add client socket to epoll: " << strerror(errno);
             close(client_fd);
             continue;
         }
@@ -324,288 +406,155 @@ void Server::handle_new_connection() {
         struct kevent change_event;
         EV_SET(&change_event, client_fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
         if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
-            std::cerr << "Failed to add client socket to kqueue: " << strerror(errno) << std::endl;
+            ORE_LOG(ERROR) << "Failed to add client socket to kqueue: " << strerror(errno);
             close(client_fd);
             continue;
         }
 #endif
-
-        {
-            std::lock_guard<std::mutex> lock(connections_mutex_);
-            connections_[client_fd] = std::make_unique<Net::Connection>(client_fd);
-        }
+        connections_[client_fd] = std::make_shared<Net::Connection>(client_fd);
     }
 
-    if (client_fd < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        // No more pending connections
-        return;
-    } else if (client_fd < 0) {
-        std::cerr << "Error accepting connection: " << strerror(errno) << std::endl;
+    if (client_fd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        ORE_LOG(ERROR) << "Error accepting connection: " << strerror(errno);
     }
 }
 
-void Server::handle_client_data(int fd) {
-    Net::Connection* conn_ptr = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        auto it = connections_.find(fd);
-        if (it == connections_.end()) {
-            std::cerr << "Error: handle_client_data called for non-existent FD " << fd << std::endl;
-            return;
-        }
-        conn_ptr = it->second.get(); // Get raw pointer, ownership remains in map
-    }
+void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn) {
+    if (conn->processing_) return; // A request is already in flight; wait for it.
 
-    if (!conn_ptr->is_open()) {
-        std::cerr << "Warning: Received data for already closed connection " << fd << std::endl;
-        close_connection(fd); // Ensure it's fully closed and removed from map
-        return;
-    }
+    size_t consumed = 0;
+    if (conn->parse_next(consumed)) {
+        // Take an owning copy of the request so it can safely outlive the
+        // socket buffer and be handed to a worker thread.
+        auto request = std::make_shared<Http::HttpRequest>(std::move(conn->current_request_));
+        request->make_owned(conn->read_buffer_.data(), consumed);
+        conn->consume(consumed);
+        conn->processing_ = true;
 
-    ssize_t bytes_read = conn_ptr->read_data();
-    if (bytes_read == 0) {
-        // Client closed connection gracefully
-        std::cerr << "Client on fd " << fd << " closed connection gracefully." << std::endl;
-        close_connection(fd); 
-        return;
-    } else if (bytes_read < 0) {
-        // Error reading (excluding EAGAIN/EWOULDBLOCK which return 0)
-        close_connection(fd);
-        return;
-    }
-
-    // Attempt to parse requests from the connection's read buffer
-    bool request_parsed_this_call = false;
-    while (conn_ptr->process_read_buffer()) {
-        // Full request parsed! Enqueue it to the thread pool for processing
-        Http::HttpRequest request_copy = conn_ptr->current_request_; // Create a copy of the request
-        request_parsed_this_call = true;
-
-        thread_pool_->enqueue([this, request_copy, fd, conn_ptr]() mutable {
-            Http::HttpResponse res; // Create a fresh response for this request
-
+        thread_pool_->enqueue([this, fd, conn, request]() {
+            Http::HttpResponse res;
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;
 
-            if (router_->find_route(request_copy.method(), request_copy.path(), path_params, handler)) {
-                request_copy.path_params_ = std::move(path_params); // Assign found path parameters
+            if (router_->find_route(request->method(), request->path(), path_params, handler)) {
+                request->path_params_ = std::move(path_params);
                 try {
-                    handler(request_copy, res); // Execute the route handler
+                    handler(*request, res);
                 } catch (const std::exception& e) {
-                    std::cerr << "Handler exception for " << Http::http_method_to_string(request_copy.method()) << " " << request_copy.path() << ": " << e.what() << std::endl;
+                    ORE_LOG(ERROR) << "Handler exception: " << e.what();
                     res.status(Http::HttpStatus::INTERNAL_SERVER_ERROR)
                        .json(Json::JsonValue::object()["error"] = Json::JsonValue("Server error"));
                 }
             } else {
-                std::cerr << "No route found for " << Http::http_method_to_string(request_copy.method()) << " " << request_copy.path() << std::endl;
                 res.status(Http::HttpStatus::NOT_FOUND)
                    .json(Json::JsonValue::object()["error"] = Json::JsonValue("Not Found"));
             }
 
-            // After handler, prepare response to be written
-            // Set the response content on the connection
-            conn_ptr->set_response_content(res);
-
-            conn_ptr->current_request_ = Http::HttpRequest(); // Clear request for next one
-            conn_ptr->http_parser_.reset(); // Reset parser for next request on same connection
-
-            // Re-arm connection for writing and subsequent reads
-#ifdef __linux__
-            epoll_event event;
-            event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT; // Request write event
-
-            event.data.fd = fd;
-            
-            // Protect epoll_ctl with connections_mutex_
             {
-                std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
-                if (epoll_ctl(this->epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                    std::cerr << "Failed to modify epoll for fd " << fd << " (from thread pool): " << strerror(errno) << std::endl;
-                    this->close_connection(fd);
-                }
+                std::lock_guard<std::mutex> lock(completed_mutex_);
+                completed_.push(CompletedResponse{fd, conn, std::move(res)});
             }
-#elif __APPLE__
-            struct kevent change_event;
-            EV_SET(&change_event, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
-            {
-                std::lock_guard<std::mutex> map_lock(this->connections_mutex_);
-                if (kevent(this->kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
-                    std::cerr << "Failed to re-arm kqueue for write on fd " << fd << " (from thread pool): " << strerror(errno) << std::endl;
-                    this->close_connection(fd);
-                }
-            }
-#endif
-        }); // End of enqueue lambda
-    } 
-
-    // If no full request was parsed in this call, re-arm for EPOLLIN to read more data.
-    // This handles cases where only partial data was received.
-    if (!request_parsed_this_call && conn_ptr->is_open()) {
-#ifdef __linux__
-        epoll_event event;
-        event.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-        event.data.fd = fd;
-        {
-            std::lock_guard<std::mutex> lock(connections_mutex_);
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                std::cerr << "Failed to modify epoll for read on fd " << fd << " after partial read: " << strerror(errno) << std::endl;
-                close_connection(fd);
-            }
-        }
-#elif __APPLE__
-        struct kevent change_event;
-        EV_SET(&change_event, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
-        {
-            std::lock_guard<std::mutex> lock(connections_mutex_);
-            if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
-                std::cerr << "Failed to re-arm kqueue for read on fd " << fd << " after partial read: " << strerror(errno) << std::endl;
-                close_connection(fd);
-            }
-        }
-#endif
-    }
-}
-
-
-void Server::handle_write_ready(int fd) {
-    Net::Connection* conn_ptr = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        auto it = connections_.find(fd);
-        if (it == connections_.end()) {
-            std::cerr << "Error: handle_write_ready called for non-existent FD " << fd << std::endl;
-            return;
-        }
-        conn_ptr = it->second.get(); // Get raw pointer, ownership remains in map
-    }
-
-    if (!conn_ptr->is_open()) {
-        std::cerr << "Warning: Received write event for already closed connection " << fd << std::endl;
-        close_connection(fd); // Ensure it's fully closed and removed from map
+            notify_event_loop();
+        });
         return;
     }
 
-    // Attempt to write data
-    ssize_t bytes_written = conn_ptr->write_data();
+    if (conn->parser_failed()) {
+        close_connection(fd);
+        return;
+    }
 
+    // Incomplete request: wait for more data.
+    rearm(fd, /*read=*/true);
+}
+
+void Server::handle_client_data(int fd) {
+    auto it = connections_.find(fd);
+    if (it == connections_.end()) return;
+    std::shared_ptr<Net::Connection> conn = it->second;
+
+    if (!conn->is_open()) {
+        close_connection(fd);
+        return;
+    }
+
+    ssize_t bytes_read = conn->read_data();
+    if (bytes_read == 0) {
+        close_connection(fd); // Peer closed the connection.
+        return;
+    }
+    if (bytes_read == -1) {
+        close_connection(fd); // Hard read error.
+        return;
+    }
+    // bytes_read > 0 (got data) or kReadWouldBlock (-2, nothing new): in both
+    // cases try to make progress on whatever is already buffered.
+    dispatch_next(fd, conn);
+}
+
+void Server::handle_write_ready(int fd) {
+    auto it = connections_.find(fd);
+    if (it == connections_.end()) return;
+    std::shared_ptr<Net::Connection> conn = it->second;
+
+    if (!conn->is_open()) {
+        close_connection(fd);
+        return;
+    }
+
+    ssize_t bytes_written = conn->write_data();
     if (bytes_written < 0) {
         close_connection(fd);
         return;
     }
 
-    // Check if all data for the current response has been sent
-    if (!conn_ptr->has_data_to_write()) {
-        // All data sent. Re-arm for reading or close if not keep-alive.
-        if (conn_ptr->keep_alive_) {
-#ifdef __linux__
-            epoll_event event;
-            event.events = EPOLLIN | EPOLLET | EPOLLONESHOT; // Read more data for next request
-            event.data.fd = fd;
-            conn_ptr->reset(); // Reset the connection for the next request
-
-            { // Protect epoll_ctl with connections_mutex_
-                std::lock_guard<std::mutex> lock(connections_mutex_);
-                if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                    std::cerr << "Failed to modify epoll for read on fd " << fd << ": " << strerror(errno) << std::endl;
-                    close_connection(fd);
-                }
-            }
-#elif __APPLE__
-            struct kevent change_event;
-            EV_SET(&change_event, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
-            conn_ptr->reset();
-            {
-                std::lock_guard<std::mutex> lock(connections_mutex_);
-                if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
-                    std::cerr << "Failed to re-arm kqueue for read on fd " << fd << ": " << strerror(errno) << std::endl;
-                    close_connection(fd);
-                }
-            }
-#endif
-        } else {
-            // Not keep-alive, close connection
-            close_connection(fd);
-        }
-    } else {
-        // Still data to send, re-arm for EPOLLOUT
-#ifdef __linux__
-        epoll_event event;
-        event.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
-        event.data.fd = fd;
-        { // Protect epoll_ctl with connections_mutex_
-            std::lock_guard<std::mutex> lock(connections_mutex_);
-            if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &event) < 0) {
-                std::cerr << "Failed to modify epoll for EPOLLOUT on fd " << fd << ": " << strerror(errno) << std::endl;
-                close_connection(fd);
-            }
-        }
-#elif __APPLE__
-        struct kevent change_event;
-        EV_SET(&change_event, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, NULL);
-        {
-            std::lock_guard<std::mutex> lock(connections_mutex_);
-            if (kevent(kqueue_fd_, &change_event, 1, NULL, 0, NULL) < 0) {
-                std::cerr << "Failed to re-arm kqueue for write on fd " << fd << ": " << strerror(errno) << std::endl;
-                close_connection(fd);
-            }
-        }
-#endif
+    if (conn->has_data_to_write()) {
+        rearm(fd, /*read=*/false); // More to send.
+        return;
     }
+
+    // Full response sent.
+    if (!conn->keep_alive_) {
+        close_connection(fd);
+        return;
+    }
+
+    conn->clear_response_state();
+    conn->processing_ = false;
+    conn->update_activity();
+    // Service the next pipelined request if present, otherwise wait for reads.
+    dispatch_next(fd, conn);
 }
 
 void Server::close_connection(int fd) {
 #ifdef __linux__
-    // 1. Remove from epoll FIRST
     if (epoll_fd_ >= 0) {
-        epoll_event event; // Dummy event is fine for EPOLL_CTL_DEL
-        if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, &event) < 0) {
-            std::cerr << "Failed to remove fd " << fd << " from epoll: " << strerror(errno) << std::endl;
-            // It's possible the fd was already removed or is invalid, so continue.
-        }
+        epoll_event event;
+        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, &event);
     }
-#elif __APPLE__
-    // For kqueue, removing the event is not strictly necessary as close() does it.
-    // However, explicitly removing it can be cleaner if you have complex event management.
-    // We'll rely on close() for simplicity here.
 #endif
+    auto it = connections_.find(fd);
+    if (it == connections_.end()) return;
 
-    // 2. Remove from map and then explicitly close the connection (which closes the socket)
-    std::unique_ptr<Net::Connection> conn_to_close;
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        auto it = connections_.find(fd);
-        if (it != connections_.end()) {
-            conn_to_close = std::move(it->second); // Take ownership and remove from map
-            connections_.erase(it);
-        }
-    }
-
-    if (conn_to_close) {
-        // The connection object will now be destructed as conn_to_close goes out of scope.
-        // Its destructor will call Net::Connection::close_connection(), which closes the socket.
-        // This ensures the socket is closed after being removed from epoll.
-        conn_to_close->close_connection(); 
-    } else {
-        std::cerr << "Warning: Attempted to close non-existent connection FD " << fd << " (already removed from map?)." << std::endl;
-    }
+    std::shared_ptr<Net::Connection> conn = std::move(it->second);
+    connections_.erase(it);
+    // Close the socket now. If a worker still holds a shared_ptr, the object
+    // stays alive but its fd is already closed (is_open() == false), so the
+    // pending response will be dropped safely in process_completions().
+    conn->close_connection();
 }
 
 void Server::cleanup_expired_connections() {
     auto now = std::chrono::steady_clock::now();
     std::vector<int> fds_to_close;
-
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        for (const auto& pair : connections_) {
-            // Example timeout: 60 seconds
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - pair.second->get_last_activity()).count() > 60) {
-                fds_to_close.push_back(pair.first);
-            }
+    for (const auto& pair : connections_) {
+        if (pair.second->processing_) continue; // Don't reap work in flight.
+        if (std::chrono::duration_cast<std::chrono::seconds>(
+                now - pair.second->get_last_activity()).count() > 60) {
+            fds_to_close.push_back(pair.first);
         }
     }
-
     for (int fd : fds_to_close) {
-        std::cout << "Cleaning up expired connection on fd " << fd << std::endl;
         close_connection(fd);
     }
 }

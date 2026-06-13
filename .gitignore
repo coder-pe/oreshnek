@@ -1,1 +1,7 @@
 build/
+build-*/
+nlohmann_json/
+expert_review_v1.md
+claude_expert_review_v1.md
+*.db
+

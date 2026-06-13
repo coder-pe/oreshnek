@@ -20,6 +20,12 @@ enum class ParsingState {
 
 class HttpParser {
 public:
+    // Anti-DoS limits. The header block (request line + headers) must complete
+    // within MAX_HEADER_BYTES; a declared Content-Length above MAX_BODY_BYTES is
+    // rejected outright. Exceeding either puts the parser in the ERROR state.
+    static constexpr size_t MAX_HEADER_BYTES = 64 * 1024;        // 64 KiB
+    static constexpr size_t MAX_BODY_BYTES = 8 * 1024 * 1024;    // 8 MiB
+
     HttpParser();
     ~HttpParser() = default;
 

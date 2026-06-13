@@ -31,9 +31,26 @@ public:
     // Raw body (points into the raw buffer)
     std::string_view body_;
 
-    // Constructor is private; requests are built by HttpParser
     HttpRequest() = default; // Only HttpParser should create these
     friend class HttpParser; // HttpParser can access private members
+
+    // Copy/move must keep the string_views consistent with owned_storage_.
+    HttpRequest(const HttpRequest& other) { copy_from(other); }
+    HttpRequest(HttpRequest&& other) noexcept { move_from(std::move(other)); }
+    HttpRequest& operator=(const HttpRequest& other) {
+        if (this != &other) copy_from(other);
+        return *this;
+    }
+    HttpRequest& operator=(HttpRequest&& other) noexcept {
+        if (this != &other) move_from(std::move(other));
+        return *this;
+    }
+
+    // Detach this request from the external socket buffer by copying the
+    // request bytes [base, base + len) into owned storage and re-pointing every
+    // string_view at that copy. After this call the request can safely outlive
+    // the connection's read buffer and be handed to another thread.
+    void make_owned(const char* base, size_t len);
 
 public:
     // Public getters for access
@@ -59,6 +76,16 @@ public:
 
     // For debugging/logging
     std::string to_string() const;
+
+private:
+    // When non-empty, all string_views above point into this buffer instead of
+    // an external socket buffer. Empty in the zero-copy hot path.
+    std::string owned_storage_;
+
+    // Shift every view by (new_base - old_base), rebuilding the maps.
+    void rebase_views(const char* old_base, const char* new_base);
+    void copy_from(const HttpRequest& other);
+    void move_from(HttpRequest&& other) noexcept;
 };
 
 } // namespace Http
