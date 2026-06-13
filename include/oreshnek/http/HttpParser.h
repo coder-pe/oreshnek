@@ -50,6 +50,10 @@ private:
     bool parse_request_line(std::string_view& data, HttpRequest& request);
     bool parse_headers(std::string_view& data, HttpRequest& request);
     bool parse_body(std::string_view& data, HttpRequest& request);
+    // Decode a chunked request body in place. Returns false (without mutating)
+    // while incomplete; on completion compacts the decoded bytes into the buffer
+    // and points request.body_ at them.
+    bool parse_chunked_body(std::string_view& data, HttpRequest& request);
     bool parse_query_parameters(std::string_view& path_and_query, HttpRequest& request);
 
     std::string error_message_;

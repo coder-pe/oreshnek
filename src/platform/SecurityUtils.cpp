@@ -154,7 +154,7 @@ std::string SecurityUtils::generateJWT(int user_id, const std::string& username,
             std::chrono::system_clock::now().time_since_epoch()).count() + 24 * 3600));
 
     std::string signing_input =
-        base64url_encode(header.to_string()) + "." + base64url_encode(payload.to_string());
+        base64url_encode(header.dump()) + "." + base64url_encode(payload.dump());
     std::string signature = base64url_encode(hmac_sha256_raw(signing_input, secret));
     return signing_input + "." + signature;
 }
@@ -171,25 +171,19 @@ bool SecurityUtils::validateJWT(const std::string& token, const std::string& sec
     try {
         // 2) Algorithm check: reject "none" / algorithm-confusion attacks.
         JsonValue header = JsonParser::parse(base64url_decode(parts[0]));
-        if (!header.is_object()) return false;
-        const auto& hobj = header.get_object();
-        auto alg_it = hobj.find("alg");
-        if (alg_it == hobj.end() || !alg_it->second.is_string() ||
-            alg_it->second.get_string() != "HS256") {
+        if (!header.is_object() || !header.contains("alg") || !header["alg"].is_string() ||
+            header["alg"].get<std::string>() != "HS256") {
             return false;
         }
 
-        // 3) Expiration check.
+        // 3) Expiration check (exp is mandatory).
         JsonValue payload = JsonParser::parse(base64url_decode(parts[1]));
-        if (!payload.is_object()) return false;
-        const auto& pobj = payload.get_object();
-        auto exp_it = pobj.find("exp");
-        if (exp_it == pobj.end() || !exp_it->second.is_number()) {
-            return false; // exp is mandatory.
+        if (!payload.is_object() || !payload.contains("exp") || !payload["exp"].is_number()) {
+            return false;
         }
         auto now = std::chrono::duration_cast<std::chrono::seconds>(
                        std::chrono::system_clock::now().time_since_epoch()).count();
-        if (static_cast<long long>(exp_it->second.get_number()) <= now) {
+        if (payload["exp"].get<long long>() <= now) {
             return false; // Expired.
         }
     } catch (const std::exception&) {

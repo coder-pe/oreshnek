@@ -1,5 +1,6 @@
 // src/main.cpp
 #include "oreshnek/Oreshnek.h" // Include the convenience header
+#include "oreshnek/http/Multipart.h" // Multipart/form-data parser
 #include "oreshnek/platform/DatabaseManager.h" // Include your DatabaseManager
 #include "oreshnek/platform/SecurityUtils.h"   // Include your SecurityUtils
 
@@ -36,89 +37,38 @@ std::string read_file_content(const std::string& file_path) {
     return buffer.str();
 }
 
-// Utility to parse multipart/form-data (simplified, needs robust implementation)
-// This is a *very basic* placeholder and will likely fail for real-world multipart data.
-// A proper implementation requires parsing boundaries, content-disposition, etc.
-// For the purpose of getting the server to compile and run with the concept, this is here.
+// Parse a multipart/form-data body using the framework parser. Text fields are
+// returned by name; file parts are saved to the upload directory and recorded
+// under "<name>_filename". The original filename is reduced to its basename to
+// avoid directory traversal via the upload name.
 std::unordered_map<std::string, std::string> parse_multipart_form_data(const std::string_view& body, const std::string_view& content_type_header) {
     std::unordered_map<std::string, std::string> parsed_data;
-    // Find boundary
-    size_t boundary_pos = content_type_header.find("boundary=");
-    if (boundary_pos == std::string_view::npos) {
-        std::cerr << "Multipart: Boundary not found in Content-Type." << std::endl;
+
+    std::string boundary = Oreshnek::Http::Multipart::boundary_from_content_type(content_type_header);
+    if (boundary.empty()) {
+        std::cerr << "Multipart: boundary not found in Content-Type." << std::endl;
         return parsed_data;
     }
-    std::string boundary = "--" + std::string(content_type_header.substr(boundary_pos + 9));
-    
-    // Very simplified parsing logic
-    size_t current_pos = 0;
-    while (current_pos < body.length()) {
-        size_t part_start = body.find(boundary, current_pos);
-        if (part_start == std::string_view::npos) break;
-        part_start += boundary.length();
-        
-        size_t part_end = body.find(boundary, part_start);
-        if (part_end == std::string_view::npos) break;
 
-        std::string_view part_content = body.substr(part_start, part_end - part_start);
+    for (const auto& part : Oreshnek::Http::Multipart::parse(body, boundary)) {
+        if (part.is_file()) {
+            std::string filename(part.filename);
+            size_t slash = filename.find_last_of("/\\");
+            if (slash != std::string::npos) filename = filename.substr(slash + 1);
+            if (filename.empty()) continue;
 
-        // Find Content-Disposition
-        size_t cd_pos = part_content.find("Content-Disposition:");
-        if (cd_pos == std::string_view::npos) continue;
-        size_t cd_end = part_content.find("\r\n", cd_pos);
-        if (cd_end == std::string_view::npos) continue;
-        std::string_view cd_header = part_content.substr(cd_pos, cd_end - cd_pos);
-
-        // Extract name and filename
-        std::string name;
-        size_t name_pos = cd_header.find("name=\"");
-        if (name_pos != std::string_view::npos) {
-            name_pos += 6;
-            size_t name_end = cd_header.find("\"", name_pos);
-            if (name_end != std::string_view::npos) {
-                name = std::string(cd_header.substr(name_pos, name_end - name_pos));
-            }
-        }
-        
-        std::string filename;
-        size_t filename_pos = cd_header.find("filename=\"");
-        if (filename_pos != std::string_view::npos) {
-            filename_pos += 10;
-            size_t filename_end = cd_header.find("\"", filename_pos);
-            if (filename_end != std::string_view::npos) {
-                filename = std::string(cd_header.substr(filename_pos, filename_end - filename_pos));
-            }
-        }
-
-        size_t headers_end = part_content.find("\r\n\r\n");
-        if (headers_end == std::string_view::npos) continue;
-        headers_end += 4; // Skip CRLFCRLF
-
-        std::string_view value_content = part_content.substr(headers_end);
-        
-        // Remove trailing CRLF
-        if (!value_content.empty() && value_content.back() == '\n') value_content.remove_suffix(1);
-        if (!value_content.empty() && value_content.back() == '\r') value_content.remove_suffix(1);
-
-        if (!name.empty()) {
-            if (!filename.empty()) {
-                // This is a file, handle saving it
-                std::string unique_filename = std::to_string(std::time(nullptr)) + "_" + filename;
-                std::string file_path = g_server_config.upload_dir + unique_filename;
-                std::ofstream ofs(file_path, std::ios::binary);
-                if (ofs.is_open()) {
-                    ofs.write(value_content.data(), value_content.length());
-                    ofs.close();
-                    parsed_data[name + "_filename"] = unique_filename; // Store filename for DB
-                } else {
-                    std::cerr << "Failed to write file: " << file_path << std::endl;
-                }
+            std::string unique_filename = std::to_string(std::time(nullptr)) + "_" + filename;
+            std::string file_path = g_server_config.upload_dir + unique_filename;
+            std::ofstream ofs(file_path, std::ios::binary);
+            if (ofs.is_open()) {
+                ofs.write(part.content.data(), static_cast<std::streamsize>(part.content.size()));
+                parsed_data[std::string(part.name) + "_filename"] = unique_filename;
             } else {
-                parsed_data[name] = std::string(value_content);
+                std::cerr << "Failed to write uploaded file: " << file_path << std::endl;
             }
+        } else {
+            parsed_data[std::string(part.name)] = std::string(part.content);
         }
-
-        current_pos = part_end;
     }
     return parsed_data;
 }
@@ -435,7 +385,7 @@ int main() {
             // Check if user_id exists in the payload
             int user_id;
             try {
-                user_id = (int)jwt_payload["user_id"].get_number();
+                user_id = jwt_payload["user_id"].get<int>();
             } catch (const std::exception& e) {
                 Oreshnek::JsonValue error_json = Oreshnek::JsonValue::object();
                 error_json["success"] = false;
@@ -536,18 +486,18 @@ int main() {
                 video_json["category"] = Oreshnek::JsonValue(video.category);
                 Oreshnek::JsonValue tags_array = Oreshnek::JsonValue::array();
                 for (const auto& tag : video.tags) {
-                    tags_array.get_array().push_back(Oreshnek::JsonValue(tag));
+                    tags_array.push_back(tag);
                 }
                 video_json["tags"] = tags_array;
                 video_json["views"] = video.views; //
                 video_json["likes"] = video.likes;
                 video_json["created_at"] = Oreshnek::JsonValue(video.created_at);
                 video_json["duration"] = Oreshnek::JsonValue(video.duration);
-                response_json["videos"].get_array().push_back(video_json); //
+                response_json["videos"].push_back(video_json);
             }
             
             // --- DEBUG PRINT: Print the generated JSON to stderr for inspection ---
-            std::cerr << "DEBUG: Sending /api/videos response: " << response_json.to_string() << std::endl;
+            std::cerr << "DEBUG: Sending /api/videos response: " << response_json.dump() << std::endl;
             // --- END DEBUG PRINT ---
 
             res.json(response_json); //

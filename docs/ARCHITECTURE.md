@@ -19,12 +19,22 @@ Oreshnek es un framework HTTP en C++20 con patrón **reactor**:
 |------------|-----------------|
 | `Server` | Orquesta el socket de escucha, el multiplexor de eventos, el router y el thread pool. **Único dueño del event loop.** |
 | `Connection` | Estado por cliente: buffer de lectura, parser HTTP, respuesta pendiente (string o stream de fichero). |
-| `HttpParser` | Parser incremental sobre `string_view` (sin copias en el camino rápido). |
+| `HttpParser` | Parser incremental sobre `string_view`. Soporta `Content-Length` y `Transfer-Encoding: chunked`. |
 | `HttpRequest` | Petición parseada. Puede *poseer* sus bytes (`make_owned`) para cruzar el límite de hilos sin punteros colgantes. |
-| `HttpResponse` | Construye la respuesta (`body`, `file`, `json`, `text`, `html`). |
+| `HttpResponse` | Construye la respuesta (`body`, `file`, `json`, `text`, `html`); lleva rango de fichero y flag HEAD. |
+| `Http::Multipart` | Parser `multipart/form-data` (zero-copy sobre el cuerpo). |
+| JSON | `Oreshnek::Json::JsonValue` es un alias de `nlohmann::json`. |
 | `Router` | Enrutado trie segmento a segmento. |
 | `ThreadPool` | Workers que consumen tareas de una cola. |
 | `Utils::Logger` | Sink de logging thread-safe (`ORE_LOG(LEVEL) << ...`). |
+
+### Respuestas de fichero
+
+Las respuestas de fichero (`HttpResponse::file()`) se sirven con `sendfile()`
+(zero-copy). El framework aplica automáticamente, tras cada handler, semánticas
+dirigidas por la petición (`apply_http_semantics`): cabecera `Accept-Ranges`,
+`Range` → `206 Partial Content`/`416`, y supresión del cuerpo para `HEAD`. El
+descriptor del fichero lo gestiona y cierra el event loop en `Connection`.
 
 ## Ciclo de vida de una petición (modelo Fase 1)
 

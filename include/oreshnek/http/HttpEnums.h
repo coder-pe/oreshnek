@@ -12,16 +12,20 @@ enum class HttpMethod {
 
 // HTTP Status Codes
 enum class HttpStatus {
+    CONTINUE = 100,
     OK = 200,
     CREATED = 201,
     ACCEPTED = 202,
     NO_CONTENT = 204,
+    PARTIAL_CONTENT = 206,
     BAD_REQUEST = 400,
     UNAUTHORIZED = 401,
     FORBIDDEN = 403,
     NOT_FOUND = 404,
     METHOD_NOT_ALLOWED = 405,
     CONFLICT = 409,
+    PAYLOAD_TOO_LARGE = 413,
+    RANGE_NOT_SATISFIABLE = 416,
     INTERNAL_SERVER_ERROR = 500,
     NOT_IMPLEMENTED = 501,
     SERVICE_UNAVAILABLE = 503
@@ -45,16 +49,20 @@ inline const char* http_method_to_string(HttpMethod method) {
 // Utility function to get string representation of HttpStatus
 inline const char* http_status_to_string(HttpStatus status) {
     switch (status) {
+        case HttpStatus::CONTINUE: return "Continue";
         case HttpStatus::OK: return "OK";
         case HttpStatus::CREATED: return "Created";
         case HttpStatus::ACCEPTED: return "Accepted";
         case HttpStatus::NO_CONTENT: return "No Content";
+        case HttpStatus::PARTIAL_CONTENT: return "Partial Content";
         case HttpStatus::BAD_REQUEST: return "Bad Request";
         case HttpStatus::UNAUTHORIZED: return "Unauthorized";
         case HttpStatus::FORBIDDEN: return "Forbidden";
         case HttpStatus::NOT_FOUND: return "Not Found";
         case HttpStatus::METHOD_NOT_ALLOWED: return "Method Not Allowed";
         case HttpStatus::CONFLICT: return "Conflict";
+        case HttpStatus::PAYLOAD_TOO_LARGE: return "Payload Too Large";
+        case HttpStatus::RANGE_NOT_SATISFIABLE: return "Range Not Satisfiable";
         case HttpStatus::INTERNAL_SERVER_ERROR: return "Internal Server Error";
         case HttpStatus::NOT_IMPLEMENTED: return "Not Implemented";
         case HttpStatus::SERVICE_UNAVAILABLE: return "Service Unavailable";

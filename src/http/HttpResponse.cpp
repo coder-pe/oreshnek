@@ -60,7 +60,7 @@ HttpResponse& HttpResponse::file(const std::string& file_path, const std::string
 }
 
 HttpResponse& HttpResponse::json(const Json::JsonValue& json_val) {
-    return body(json_val.to_string()).header("Content-Type", "application/json");
+    return body(json_val.dump()).header("Content-Type", "application/json");
 }
 
 HttpResponse& HttpResponse::text(const std::string& content) {
@@ -95,6 +95,14 @@ const std::string& HttpResponse::get_body() const {
 }
 */
 
+const std::string& HttpResponse::file_path() const {
+    static const std::string empty;
+    if (!is_file_response_ || !std::holds_alternative<FilePath>(body_content_)) {
+        return empty;
+    }
+    return std::get<FilePath>(body_content_).path;
+}
+
 std::string HttpResponse::build_headers_string() const {
     std::ostringstream oss;
 
@@ -122,6 +130,9 @@ void HttpResponse::reset() {
     headers_.clear();
     body_content_ = std::string(); // Reset to empty string (assigns to the std::string alternative)
     is_file_response_ = false;
+    file_offset_ = 0;
+    file_length_ = -1;
+    head_only_ = false;
     // Re-add default headers
     header("Server", "Oreshnek/1.0.0");
     header("Connection", "keep-alive");

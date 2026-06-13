@@ -61,12 +61,11 @@ int main() {
     auto payload = SecurityUtils::decodeJWT(token);
     check(payload.is_object(), "payload decodes to a JSON object");
     if (payload.is_object()) {
-        const auto& obj = payload.get_object();
-        check(obj.count("user_id") && static_cast<int>(obj.at("user_id").get_number()) == 42,
+        check(payload.contains("user_id") && payload.at("user_id").get<int>() == 42,
               "user_id claim == 42");
-        check(obj.count("username") && obj.at("username").get_string() == "alice",
+        check(payload.contains("username") && payload.at("username").get<std::string>() == "alice",
               "username claim == alice");
-        check(obj.count("exp"), "exp claim present");
+        check(payload.contains("exp"), "exp claim present");
     }
 
     if (g_failures == 0) {

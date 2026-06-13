@@ -4,40 +4,18 @@
 
 #include "oreshnek/json/JsonValue.h"
 #include <string_view>
-#include <stack>
-#include <optional>
 
 namespace Oreshnek {
 namespace Json {
 
+// Thin shim over nlohmann/json's parser, preserving the historical
+// Json::JsonParser::parse(...) entry point. Throws nlohmann::json::parse_error
+// (a std::exception) on invalid input.
 class JsonParser {
 public:
-    // Parses a JSON string and returns a JsonValue object.
-    // Throws std::runtime_error on parsing errors.
-    static JsonValue parse(std::string_view json_string);
-
-private:
-    // Internal state for parsing
-    enum class ParserState {
-        EXPECT_VALUE,
-        EXPECT_KEY,
-        EXPECT_COLON,
-        EXPECT_VALUE_OR_END_OBJECT,
-        EXPECT_VALUE_OR_END_ARRAY,
-        EXPECT_COMMA_OR_END_OBJECT,
-        EXPECT_COMMA_OR_END_ARRAY
-    };
-
-    // Helper functions for parsing different JSON types
-    static JsonValue parse_value(std::string_view& data);
-    static JsonValue parse_string(std::string_view& data);
-    static JsonValue parse_number(std::string_view& data);
-    static JsonValue parse_object(std::string_view& data);
-    static JsonValue parse_array(std::string_view& data);
-    static bool parse_keyword(std::string_view& data, std::string_view keyword);
-
-    // Skip whitespace characters
-    static void skip_whitespace(std::string_view& data);
+    static JsonValue parse(std::string_view json_string) {
+        return JsonValue::parse(json_string.begin(), json_string.end());
+    }
 };
 
 } // namespace Json

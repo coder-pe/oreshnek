@@ -8,9 +8,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
-#include <memory> // For unique_ptr
-#include <fstream> // For file streaming
-#include <variant> // For std::variant
+#include <sys/types.h> // For off_t
 
 namespace Oreshnek {
 namespace Net {
@@ -19,7 +17,8 @@ class Connection {
 public:
     // Changed buffer size from 8KB to 1MB to handle larger requests/uploads
     static constexpr size_t READ_BUFFER_SIZE = 1024 * 1024; // 1MB
-    static constexpr size_t WRITE_BUFFER_CHUNK_SIZE = 4096; // Chunk size for sending file data
+    // Maximum bytes handed to a single sendfile() call.
+    static constexpr size_t FILE_SEND_CHUNK = 256 * 1024;
 
     // Sentinel returned by read_data() when the socket has no data right now
     // (EAGAIN/EWOULDBLOCK) but is still open. Distinct from 0 (peer closed).
@@ -29,15 +28,22 @@ public:
     std::vector<char> read_buffer_; // Buffer for incoming data
     size_t read_buffer_fill_ = 0; // Current fill level of the read buffer
 
-    // This will now hold either a string response or an active file stream
-    // Add FilePath to the variant to differentiate the original source
-    std::variant<std::string, std::unique_ptr<std::ifstream>> write_content_; // Removed Http::FilePath, now only string or ifstream
-    size_t file_bytes_sent_ = 0; // For file streaming: track bytes sent
-    bool headers_sent_ = false; // To ensure headers are sent only once
+    // --- Outgoing response state (touched only by the event-loop thread) ---
+    std::string raw_headers_to_send_; // Serialized status line + headers
+    bool headers_sent_ = false;       // Headers are sent before any body
 
-    // Store the raw headers string to be sent for file responses
-    std::string raw_headers_to_send_; 
-    std::string file_path_to_stream_; // Store the file path for file responses
+    // In-memory string body (JSON/HTML/text). The offset avoids the O(n^2)
+    // cost of erasing from the front on each partial write.
+    std::string write_body_;
+    size_t write_body_offset_ = 0;
+
+    // File body served with zero-copy sendfile(). file_fd_ >= 0 when active.
+    int file_fd_ = -1;
+    off_t file_offset_ = 0;    // Current offset within the file
+    off_t file_remaining_ = 0; // Bytes still to send
+
+    bool head_only_ = false;   // HEAD request: emit headers, suppress body
+    bool continue_sent_ = false; // "100 Continue" already sent for current request
 
     Http::HttpParser http_parser_;
     Http::HttpRequest current_request_; // Holds the parsed request data
@@ -84,6 +90,11 @@ public:
 
     // Drop `n` bytes from the front of the read buffer.
     void consume(size_t n);
+
+    // If the (partially parsed) current request is awaiting a body and carries
+    // "Expect: 100-continue", send a one-shot "100 Continue" so the client
+    // starts uploading. No-op if already sent or not applicable.
+    void maybe_send_100_continue();
 
     // Close the socket connection
     void close_connection();

@@ -9,6 +9,7 @@
 #include <vector>
 #include <variant> // For std::variant (C++17) to hold different body types
 #include <fstream> // For std::ifstream
+#include <cstdint> // For int64_t (file offsets/lengths)
 
 namespace Oreshnek {
 namespace Http {
@@ -28,6 +29,14 @@ private:
     // Use std::variant to hold either a string body or a file path for streaming
     std::variant<std::string, FilePath> body_content_; // Stores either direct content or file path
     bool is_file_response_ = false; // Flag to indicate if content_ is a file path
+
+    // For file responses: byte range to send. file_length_ < 0 means "from
+    // file_offset_ to end of file" (resolved by the connection once the file is
+    // opened). Set by the framework when honouring a Range request.
+    int64_t file_offset_ = 0;
+    int64_t file_length_ = -1;
+    // When true (HEAD requests), headers are sent but the body is suppressed.
+    bool head_only_ = false;
 
 public:
     HttpResponse(); // Default constructor
@@ -60,6 +69,20 @@ public:
     // Get the variant directly for more efficient handling in Connection/Server
     const std::variant<std::string, FilePath>& get_body_variant() const { return body_content_; }
 
+    // Path of a file response (empty if not a file response).
+    const std::string& file_path() const;
+
+    // Byte range for a file response.
+    int64_t file_offset() const { return file_offset_; }
+    int64_t file_length() const { return file_length_; }
+    void set_file_range(int64_t offset, int64_t length) {
+        file_offset_ = offset;
+        file_length_ = length;
+    }
+
+    // HEAD support: send headers only, no body.
+    bool head_only() const { return head_only_; }
+    void set_head_only(bool v) { head_only_ = v; }
 
     // Build the full HTTP response string (excluding large file body)
     std::string build_headers_string() const;
