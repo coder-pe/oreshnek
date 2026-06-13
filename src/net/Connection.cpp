@@ -2,10 +2,19 @@
 #include "oreshnek/net/Connection.h"
 #include <unistd.h> // For close, read, write
 #include <sys/socket.h> // For recv, send
+#include <sys/stat.h>   // For fstat
+#include <fcntl.h>      // For open
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
-#include <filesystem> // For file size
+#include <algorithm>  // For std::min
 #include "oreshnek/utils/Logger.h"
+
+#ifdef __linux__
+#include <sys/sendfile.h>
+#elif defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/socket.h>
+#endif
 
 // Avoid SIGPIPE on writes to a peer that closed the connection. Linux supports
 // the per-call MSG_NOSIGNAL flag; on platforms without it (e.g. macOS) this is a
@@ -21,10 +30,7 @@ Connection::Connection(int fd)
     : socket_fd_(fd),
       read_buffer_(READ_BUFFER_SIZE), // Allocate buffer
       read_buffer_fill_(0),
-      file_bytes_sent_(0),
-      headers_sent_(false),
       last_activity_(std::chrono::steady_clock::now()) {
-    write_content_ = std::string(); // Initialize with an empty string
 }
 
 Connection::~Connection() {
@@ -33,24 +39,26 @@ Connection::~Connection() {
 
 void Connection::reset() {
     read_buffer_fill_ = 0;
-    file_bytes_sent_ = 0;
-    headers_sent_ = false;
-    write_content_ = std::string(); // Reset to empty string
     http_parser_.reset();
     current_request_ = Http::HttpRequest(); // Reset HttpRequest
     keep_alive_ = true; // Assume keep-alive by default for new requests
     processing_ = false;
-    raw_headers_to_send_.clear(); // Clear raw headers
-    file_path_to_stream_.clear(); // Clear file path
+    clear_response_state();
     update_activity();
 }
 
 void Connection::clear_response_state() {
-    write_content_ = std::string();
-    file_bytes_sent_ = 0;
     headers_sent_ = false;
     raw_headers_to_send_.clear();
-    file_path_to_stream_.clear();
+    write_body_.clear();
+    write_body_offset_ = 0;
+    head_only_ = false;
+    if (file_fd_ >= 0) {
+        close(file_fd_);
+        file_fd_ = -1;
+    }
+    file_offset_ = 0;
+    file_remaining_ = 0;
 }
 
 ssize_t Connection::read_data() {
@@ -89,93 +97,85 @@ ssize_t Connection::write_data() {
 
     ssize_t bytes_sent_in_call = 0;
 
-    // Send headers first if not already sent
+    // 1) Send headers first.
     if (!headers_sent_) {
         if (!raw_headers_to_send_.empty()) {
-            ssize_t header_bytes_to_send = raw_headers_to_send_.length();
-            ssize_t header_bytes_sent = send(socket_fd_, raw_headers_to_send_.c_str(), header_bytes_to_send, MSG_NOSIGNAL);
-
-            if (header_bytes_sent < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    return 0; // Try again later
-                }
+            ssize_t n = send(socket_fd_, raw_headers_to_send_.c_str(),
+                             raw_headers_to_send_.length(), MSG_NOSIGNAL);
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
                 ORE_LOG(ERROR) << "Error sending headers to socket " << socket_fd_ << ": " << strerror(errno);
                 return -1;
-            } else {
-                bytes_sent_in_call += header_bytes_sent;
-                raw_headers_to_send_.erase(0, header_bytes_sent); // Remove sent data
-
-                if (raw_headers_to_send_.empty()) {
-                    headers_sent_ = true; // All headers sent
-                    // If it's a file response, now open the file for streaming
-                    if (!file_path_to_stream_.empty()) {
-                        auto file_stream = std::make_unique<std::ifstream>(file_path_to_stream_, std::ios::binary);
-                        if (!file_stream->is_open()) {
-                            ORE_LOG(ERROR) << "Error opening file for streaming: " << file_path_to_stream_;
-                            write_content_ = std::string(); // Clear variant
-                            file_path_to_stream_.clear();
-                            return -1;
-                        }
-                        write_content_ = std::move(file_stream); // Transition to file stream
-                        file_bytes_sent_ = 0;
-                    }
-                }
             }
+            bytes_sent_in_call += n;
+            raw_headers_to_send_.erase(0, n);
         }
+        if (!raw_headers_to_send_.empty()) {
+            return bytes_sent_in_call; // Headers not fully flushed yet.
+        }
+        headers_sent_ = true;
     }
 
+    // HEAD responses carry no body.
+    if (head_only_) {
+        update_activity();
+        return bytes_sent_in_call;
+    }
 
-    if (headers_sent_) { // Only attempt to send body if headers are sent
-        if (std::holds_alternative<std::string>(write_content_)) {
-            // This is for string bodies
-            std::string& body_str = std::get<std::string>(write_content_);
-            if (!body_str.empty()) {
-                ssize_t body_bytes_sent = send(socket_fd_, body_str.c_str(), body_str.length(), MSG_NOSIGNAL);
-                if (body_bytes_sent < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) return bytes_sent_in_call;
-                    ORE_LOG(ERROR) << "Error writing string body to socket " << socket_fd_ << ": " << strerror(errno);
-                    return -1;
-                } else {
-                    bytes_sent_in_call += body_bytes_sent;
-                    body_str.erase(0, body_bytes_sent); // Remove sent data
-                }
+    // 2) Send a file body with zero-copy sendfile().
+    if (file_fd_ >= 0) {
+        while (file_remaining_ > 0) {
+            size_t count = static_cast<size_t>(
+                std::min<off_t>(file_remaining_, static_cast<off_t>(FILE_SEND_CHUNK)));
+#ifdef __linux__
+            off_t off = file_offset_;
+            ssize_t n = ::sendfile(socket_fd_, file_fd_, &off, count);
+            if (n > 0) {
+                file_offset_ = off;
+                file_remaining_ -= n;
+                bytes_sent_in_call += n;
+                continue;
             }
-        } else if (std::holds_alternative<std::unique_ptr<std::ifstream>>(write_content_)) {
-            // This is for file streaming
-            std::ifstream* file_stream = std::get<std::unique_ptr<std::ifstream>>(write_content_).get();
-            if (!file_stream || !file_stream->is_open()) {
-                ORE_LOG(ERROR) << "File stream not open for fd " << socket_fd_;
-                return -1;
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return bytes_sent_in_call;
+            if (n == 0) break; // Unexpected EOF (file shrank); stop.
+            ORE_LOG(ERROR) << "sendfile error on socket " << socket_fd_ << ": " << strerror(errno);
+            return -1;
+#elif defined(__APPLE__)
+            off_t len = static_cast<off_t>(count);
+            int r = ::sendfile(file_fd_, socket_fd_, file_offset_, &len, nullptr, 0);
+            if (len > 0) {
+                file_offset_ += len;
+                file_remaining_ -= len;
+                bytes_sent_in_call += len;
             }
-
-            std::vector<char> buffer(WRITE_BUFFER_CHUNK_SIZE);
-            file_stream->read(buffer.data(), WRITE_BUFFER_CHUNK_SIZE);
-            ssize_t bytes_to_send = file_stream->gcount();
-
-            if (bytes_to_send > 0) {
-                ssize_t bytes_sent = send(socket_fd_, buffer.data(), bytes_to_send, MSG_NOSIGNAL);
-                if (bytes_sent > 0) {
-                    file_bytes_sent_ += bytes_sent;
-                    // If partial send, rewind file stream
-                    if (bytes_sent < bytes_to_send) {
-                        std::streampos current_pos = file_stream->tellg();
-                        std::streamoff offset = static_cast<std::streamoff>(bytes_to_send - bytes_sent);
-                        file_stream->seekg(current_pos - offset);
-                    }
-                    bytes_sent_in_call += bytes_sent;
-                } else if (bytes_sent < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) return bytes_sent_in_call;
-                    ORE_LOG(ERROR) << "Error writing file data to socket " << socket_fd_ << ": " << strerror(errno);
-                    return -1;
-                }
-            } else if (file_stream->eof()) {
-                // End of file, all data sent. Close the stream.
-                file_stream->close();
-                write_content_ = std::string(); // Clear the variant to empty string
-                file_bytes_sent_ = 0;
-                file_path_to_stream_.clear(); // Clear the path
+            if (r == 0) {
+                if (len == 0) break; // Nothing more could be read.
+                continue;
             }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return bytes_sent_in_call;
+            ORE_LOG(ERROR) << "sendfile error on socket " << socket_fd_ << ": " << strerror(errno);
+            return -1;
+#endif
         }
+        if (file_remaining_ <= 0 && file_fd_ >= 0) {
+            close(file_fd_);
+            file_fd_ = -1;
+        }
+        update_activity();
+        return bytes_sent_in_call;
+    }
+
+    // 3) Send an in-memory string body (tracking an offset, no front-erase).
+    if (write_body_offset_ < write_body_.size()) {
+        ssize_t n = send(socket_fd_, write_body_.data() + write_body_offset_,
+                         write_body_.size() - write_body_offset_, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return bytes_sent_in_call;
+            ORE_LOG(ERROR) << "Error writing body to socket " << socket_fd_ << ": " << strerror(errno);
+            return -1;
+        }
+        write_body_offset_ += static_cast<size_t>(n);
+        bytes_sent_in_call += n;
     }
 
     update_activity();
@@ -183,17 +183,33 @@ ssize_t Connection::write_data() {
 }
 
 void Connection::set_response_content(const Http::HttpResponse& response) {
-    // Reset state for new response
-    headers_sent_ = false;
-    file_bytes_sent_ = 0;
-    raw_headers_to_send_ = response.build_headers_string(); // Store headers string
+    clear_response_state();
+    raw_headers_to_send_ = response.build_headers_string();
+    head_only_ = response.head_only();
 
     if (response.is_file()) {
-        file_path_to_stream_ = std::get<Http::FilePath>(response.get_body_variant()).path; // Store file path
-        write_content_ = std::string(); // Initialize write_content_ to an empty string (will be replaced by ifstream later)
+        const std::string& path = response.file_path();
+        file_fd_ = ::open(path.c_str(), O_RDONLY);
+        if (file_fd_ < 0) {
+            ORE_LOG(ERROR) << "Error opening file for response: " << path << ": " << strerror(errno);
+            file_remaining_ = 0;
+            return;
+        }
+        file_offset_ = static_cast<off_t>(response.file_offset());
+        off_t length = static_cast<off_t>(response.file_length());
+        if (length < 0) {
+            // Whole file from the given offset: derive the size.
+            struct stat st;
+            if (fstat(file_fd_, &st) == 0) {
+                length = st.st_size - file_offset_;
+                if (length < 0) length = 0;
+            } else {
+                length = 0;
+            }
+        }
+        file_remaining_ = length;
     } else {
-        file_path_to_stream_.clear(); // Not a file response
-        write_content_ = std::get<std::string>(response.get_body_variant()); // Store the body string directly
+        write_body_ = std::get<std::string>(response.get_body_variant());
     }
 }
 
@@ -234,6 +250,10 @@ void Connection::consume(size_t n) {
 }
 
 void Connection::close_connection() {
+    if (file_fd_ >= 0) {
+        close(file_fd_);
+        file_fd_ = -1;
+    }
     if (socket_fd_ >= 0) {
         ORE_LOG(DEBUG) << "Closing connection " << socket_fd_;
         close(socket_fd_);
@@ -242,18 +262,10 @@ void Connection::close_connection() {
 }
 
 bool Connection::has_data_to_write() const {
-    // If headers haven't been sent yet, we have headers to write
-    if (!raw_headers_to_send_.empty()) {
-        return true;
-    }
-    // If headers are sent, check the actual body content
-    if (std::holds_alternative<std::string>(write_content_)) {
-        return !std::get<std::string>(write_content_).empty();
-    } else if (std::holds_alternative<std::unique_ptr<std::ifstream>>(write_content_)) {
-        const auto& stream_ptr = std::get<std::unique_ptr<std::ifstream>>(write_content_);
-        return stream_ptr && stream_ptr->is_open() && !stream_ptr->eof();
-    }
-    return false;
+    if (!raw_headers_to_send_.empty()) return true; // Headers still pending.
+    if (head_only_) return false;                   // HEAD: no body.
+    if (file_fd_ >= 0 && file_remaining_ > 0) return true;
+    return write_body_offset_ < write_body_.size();
 }
 
 } // namespace Net

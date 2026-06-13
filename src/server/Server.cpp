@@ -20,9 +20,88 @@
 #include <sys/event.h>
 #endif
 #include <sys/stat.h> // For stat (to get file size and check existence)
+#include <string>
 
 namespace Oreshnek {
 namespace Server {
+
+namespace {
+// Applies request-driven semantics to a freshly produced response:
+//  * HEAD requests: suppress the body (headers only).
+//  * File responses: advertise Accept-Ranges and, if the request carries a
+//    single byte Range, switch to 206 Partial Content (or 416 if unsatisfiable).
+// Only a single range is supported; multi-range requests fall back to 200.
+void apply_http_semantics(const Http::HttpRequest& req, Http::HttpResponse& res) {
+    if (req.method() == Http::HttpMethod::HEAD) {
+        res.set_head_only(true);
+    }
+    if (!res.is_file()) return;
+
+    struct stat st;
+    if (::stat(res.file_path().c_str(), &st) != 0) return; // handler already validated existence
+    const off_t size = st.st_size;
+    res.header("Accept-Ranges", "bytes");
+
+    auto range_hdr = req.header("Range");
+    if (!range_hdr) {
+        res.set_file_range(0, size);
+        return;
+    }
+
+    // Only "bytes=START-END" single ranges are supported.
+    std::string spec(*range_hdr);
+    const std::string prefix = "bytes=";
+    if (spec.rfind(prefix, 0) != 0 || spec.find(',') != std::string::npos) {
+        res.set_file_range(0, size);
+        return;
+    }
+    std::string r = spec.substr(prefix.size());
+    auto dash = r.find('-');
+    if (dash == std::string::npos) {
+        res.set_file_range(0, size);
+        return;
+    }
+
+    const std::string s_start = r.substr(0, dash);
+    const std::string s_end = r.substr(dash + 1);
+    off_t start = 0, end = size - 1;
+    bool ok = (size > 0);
+    try {
+        if (!s_start.empty()) {
+            start = std::stoll(s_start);
+            if (!s_end.empty()) end = std::stoll(s_end);
+        } else if (!s_end.empty()) {
+            off_t n = std::stoll(s_end); // suffix: final N bytes
+            if (n <= 0) ok = false;
+            else start = (n >= size) ? 0 : size - n;
+        } else {
+            ok = false; // "bytes=-"
+        }
+    } catch (const std::exception&) {
+        ok = false;
+    }
+    if (ok) {
+        if (end >= size) end = size - 1;
+        if (start < 0 || start > end) ok = false;
+    }
+
+    if (!ok) {
+        res.status(Http::HttpStatus::RANGE_NOT_SATISFIABLE);
+        res.header("Content-Range", "bytes */" + std::to_string(size));
+        res.header("Content-Length", "0");
+        res.set_head_only(true);
+        res.set_file_range(0, 0);
+        return;
+    }
+
+    const off_t length = end - start + 1;
+    res.status(Http::HttpStatus::PARTIAL_CONTENT);
+    res.header("Content-Range",
+               "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(size));
+    res.header("Content-Length", std::to_string(length));
+    res.set_file_range(start, length);
+}
+}  // namespace
 
 Server::Server(size_t worker_threads)
     : listen_fd_(-1),
@@ -436,7 +515,14 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;
 
-            if (router_->find_route(request->method(), request->path(), path_params, handler)) {
+            // HEAD reuses the GET handler; the body is stripped later.
+            Http::HttpMethod method = request->method();
+            bool found = router_->find_route(method, request->path(), path_params, handler);
+            if (!found && method == Http::HttpMethod::HEAD) {
+                found = router_->find_route(Http::HttpMethod::GET, request->path(), path_params, handler);
+            }
+
+            if (found) {
                 request->path_params_ = std::move(path_params);
                 try {
                     handler(*request, res);
@@ -451,6 +537,10 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
                 err["error"] = "Not Found";
                 res.status(Http::HttpStatus::NOT_FOUND).json(err);
             }
+
+            // Apply request-driven response semantics (Range for file responses,
+            // HEAD body suppression) before handing the response back.
+            apply_http_semantics(*request, res);
 
             {
                 std::lock_guard<std::mutex> lock(completed_mutex_);

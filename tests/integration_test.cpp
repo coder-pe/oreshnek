@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cstring>
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -85,26 +86,39 @@ public:
     // body). Returns the response body on success, std::nullopt on error.
     struct Response {
         int status = 0;
+        std::string headers; // raw header block (without the trailing CRLFCRLF)
         std::string body;
+
+        bool has_header(const std::string& needle) const {
+            std::string lower = headers, n = needle;
+            for (char& c : lower) c = static_cast<char>(::tolower(c));
+            for (char& c : n) c = static_cast<char>(::tolower(c));
+            return lower.find(n) != std::string::npos;
+        }
     };
 
-    bool read_response(Response& out) {
-        // Ensure we have the full header block.
+    // read_body=false is used for HEAD responses: parse status+headers but do
+    // not consume a body (there is none, even though Content-Length is set).
+    bool read_response(Response& out, bool read_body = true) {
         size_t header_end;
         while ((header_end = buf_.find("\r\n\r\n")) == std::string::npos) {
             if (!fill()) return false;
         }
 
-        // Parse status code from the status line ("HTTP/1.1 200 OK").
         size_t sp = buf_.find(' ');
         out.status = (sp != std::string::npos) ? std::atoi(buf_.c_str() + sp + 1) : 0;
+        out.headers = buf_.substr(0, header_end);
 
-        size_t content_length = parse_content_length(buf_.substr(0, header_end));
         size_t body_start = header_end + 4;
+        if (!read_body) {
+            buf_.erase(0, body_start);
+            return true;
+        }
+
+        size_t content_length = parse_content_length(out.headers);
         while (buf_.size() < body_start + content_length) {
             if (!fill()) return false;
         }
-
         out.body = buf_.substr(body_start, content_length);
         buf_.erase(0, body_start + content_length);
         return true;
@@ -141,17 +155,23 @@ private:
 };
 
 std::string make_request(const std::string& method, const std::string& path,
-                         const std::string& body = "") {
+                         const std::string& body = "",
+                         const std::string& extra_headers = "") {
     std::string req = method + " " + path + " HTTP/1.1\r\n";
     req += "Host: localhost\r\n";
     if (!body.empty() || method == "POST") {
         req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
         req += "Content-Type: text/plain\r\n";
     }
+    req += extra_headers;
     req += "\r\n";
     req += body;
     return req;
 }
+
+// Known file content served by the /file route, written to disk in main().
+std::string g_file_content;
+std::string g_file_path;
 
 // ---------------------------------------------------------------------------
 // Test cases
@@ -225,10 +245,74 @@ void test_concurrency() {
     for (auto& th : threads) th.join();
 }
 
+void test_file_full() {
+    Client c;
+    check(c.connect(), "file_full: connect");
+    check(c.send_all(make_request("GET", "/file")), "file_full: send");
+    Client::Response resp;
+    check(c.read_response(resp), "file_full: read");
+    check(resp.status == 200, "file_full: status 200");
+    check(resp.has_header("accept-ranges: bytes"), "file_full: Accept-Ranges present");
+    check(resp.body == g_file_content,
+          "file_full: body matches file (" + std::to_string(resp.body.size()) + " bytes)");
+}
+
+void test_file_range() {
+    Client c;
+    check(c.connect(), "file_range: connect");
+    // Request bytes 10-19 (10 bytes).
+    check(c.send_all(make_request("GET", "/file", "", "Range: bytes=10-19\r\n")), "file_range: send");
+    Client::Response resp;
+    check(c.read_response(resp), "file_range: read");
+    check(resp.status == 206, "file_range: status 206, got " + std::to_string(resp.status));
+    check(resp.has_header("content-range: bytes 10-19/"), "file_range: Content-Range header");
+    check(resp.body == g_file_content.substr(10, 10),
+          "file_range: body == bytes[10..19], got '" + resp.body + "'");
+
+    // Suffix range: last 5 bytes.
+    Client c2;
+    check(c2.connect(), "file_range2: connect");
+    check(c2.send_all(make_request("GET", "/file", "", "Range: bytes=-5\r\n")), "file_range2: send");
+    Client::Response r2;
+    check(c2.read_response(r2), "file_range2: read");
+    check(r2.status == 206, "file_range2: status 206");
+    check(r2.body == g_file_content.substr(g_file_content.size() - 5),
+          "file_range2: body == last 5 bytes");
+}
+
+void test_head() {
+    Client c;
+    check(c.connect(), "head: connect");
+    check(c.send_all(make_request("HEAD", "/file")), "head: send");
+    Client::Response resp;
+    check(c.read_response(resp, /*read_body=*/false), "head: read");
+    check(resp.status == 200, "head: status 200");
+    check(resp.has_header("content-length: " + std::to_string(g_file_content.size())),
+          "head: Content-Length reflects full size");
+    check(resp.body.empty(), "head: no body");
+
+    // A subsequent request on the same connection must still work (no body
+    // bytes were left unconsumed by the HEAD response).
+    check(c.send_all(make_request("GET", "/ping")), "head: pipelined GET send");
+    Client::Response ping;
+    check(c.read_response(ping), "head: pipelined GET read");
+    check(ping.body == "pong", "head: keep-alive after HEAD works");
+}
+
 }  // namespace
 
 int main() {
     using namespace Oreshnek;
+
+    // Write a known file to serve.
+    g_file_path = "/tmp/oreshnek_it_file.bin";
+    g_file_content.resize(100000);
+    for (size_t i = 0; i < g_file_content.size(); ++i)
+        g_file_content[i] = static_cast<char>('A' + (i % 26));
+    {
+        std::ofstream ofs(g_file_path, std::ios::binary);
+        ofs.write(g_file_content.data(), g_file_content.size());
+    }
 
     Server::Server server(4);
     server.get("/ping", [](const Http::HttpRequest&, Http::HttpResponse& res) {
@@ -236,6 +320,9 @@ int main() {
     });
     server.post("/echo", [](const Http::HttpRequest& req, Http::HttpResponse& res) {
         res.status(Http::HttpStatus::OK).body(std::string(req.body()));
+    });
+    server.get("/file", [](const Http::HttpRequest&, Http::HttpResponse& res) {
+        res.status(Http::HttpStatus::OK).file(g_file_path, "application/octet-stream");
     });
 
     if (!server.listen(kHost, kPort)) {
@@ -251,6 +338,9 @@ int main() {
     test_pipelining();
     test_large_body_echo();
     test_concurrency();
+    test_file_full();
+    test_file_range();
+    test_head();
 
     // Correct shutdown contract: signal the loop, then join its thread. run()
     // tears down its own connections/fds; the Server destructor stops the pool.
