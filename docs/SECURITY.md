@@ -67,8 +67,18 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
   de conexión lenta tipo Slowloris a nivel de conexión. Ver
   [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## TLS / HTTPS
+
+- Activable por `tls.enabled`: el puerto de escucha habla HTTPS. Certificado y
+  clave PEM por config o, preferentemente, por entorno (`ORESHNEK_TLS_CERT`,
+  `ORESHNEK_TLS_KEY`); se cargan al arrancar y un cert/key inválido o que no casa
+  aborta el inicio.
+- Versión mínima configurable (`min_version`: TLS 1.2 por defecto, o 1.3); sin
+  compresión TLS, preferencia de cifrados del servidor.
+- Handshake no bloqueante en el event loop. Ver [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Pendiente (fases posteriores)
 
-- TLS/HTTPS (Fase 5), rate limiting (Fase 5).
+- Rate limiting y métricas (Fase 6, en curso).
 - Cabeceras de seguridad (HSTS, X-Frame-Options) además del CORS ya disponible.
-- Timeout de handler (`504`) con cancelación cooperativa de workers (Fase 5).
+- Timeout de handler (`504`) con cancelación cooperativa de workers (Fase 6).

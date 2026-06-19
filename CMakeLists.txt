@@ -84,6 +84,7 @@ add_library(oreshnek STATIC ${ORESHNEK_LIB_SOURCES})
 target_include_directories(oreshnek PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(oreshnek PUBLIC
     Threads::Threads
+    OpenSSL::SSL
     OpenSSL::Crypto
     SQLite::SQLite3
     PostgreSQL::PostgreSQL
@@ -147,4 +148,10 @@ if(ORESHNEK_BUILD_TESTS)
     target_compile_options(pg_test PRIVATE -Wall -Wextra)
     add_test(NAME pg_test COMMAND pg_test)
     set_tests_properties(pg_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
+    add_executable(tls_test tests/tls_test.cpp)
+    target_link_libraries(tls_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(tls_test PRIVATE -Wall -Wextra)
+    add_test(NAME tls_test COMMAND tls_test)
+    set_tests_properties(tls_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 endif()

@@ -33,6 +33,15 @@ struct DatabaseConfig {
     std::string pg_url;
 };
 
+// TLS / HTTPS settings. When enabled, the listen socket speaks TLS (the server
+// is HTTPS-only on its port).
+struct TlsConfig {
+    bool enabled = false;
+    std::string cert_file;            // PEM certificate (chain), prefer ORESHNEK_TLS_CERT
+    std::string key_file;             // PEM private key, prefer ORESHNEK_TLS_KEY
+    std::string min_version = "1.2";  // "1.2" | "1.3"
+};
+
 // Runtime configuration, loadable from an external JSON file (see Config::load).
 struct ServerConfig {
     int port = 8080;
@@ -59,6 +68,9 @@ struct ServerConfig {
 
     // Persistence.
     DatabaseConfig db;
+
+    // TLS / HTTPS.
+    TlsConfig tls;
 
     // CORS (applied by the built-in CORS middleware when enabled).
     bool cors_enabled = false;

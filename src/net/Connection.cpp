@@ -8,6 +8,8 @@
 #include <cstring>    // For strerror
 #include <algorithm>  // For std::min
 #include <cctype>     // For std::tolower
+#include <climits>    // For INT_MAX
+#include <openssl/ssl.h> // For TLS (SSL_read/SSL_write/SSL_accept)
 #include "oreshnek/utils/Logger.h"
 
 #ifdef __linux__
@@ -63,6 +65,23 @@ void Connection::clear_response_state() {
     file_remaining_ = 0;
 }
 
+int Connection::continue_tls_handshake() {
+    if (ssl_ == nullptr) { tls_handshake_done_ = true; return 1; }
+    int r = SSL_accept(ssl_);
+    if (r == 1) {
+        tls_handshake_done_ = true;
+        update_activity();
+        return 1;
+    }
+    switch (SSL_get_error(ssl_, r)) {
+        case SSL_ERROR_WANT_READ:  tls_want_ = TlsWant::Read;  return 0;
+        case SSL_ERROR_WANT_WRITE: tls_want_ = TlsWant::Write; return 0;
+        default:
+            ORE_LOG(WARN) << "TLS handshake failed on fd " << socket_fd_;
+            return -1;
+    }
+}
+
 ssize_t Connection::read_data() {
     if (socket_fd_ < 0) return 0; // Connection already closed
 
@@ -72,6 +91,34 @@ ssize_t Connection::read_data() {
         // if parse_request is called after each read and consumes data.
         ORE_LOG(WARN) << "Read buffer full for fd " << socket_fd_;
         return 0;
+    }
+
+    // TLS path: drain SSL_read fully, since edge-triggered epoll/kqueue will not
+    // re-notify for bytes already buffered inside OpenSSL.
+    if (ssl_ != nullptr) {
+        size_t total = 0;
+        for (;;) {
+            size_t space = read_buffer_.size() - read_buffer_fill_;
+            if (space == 0) break; // Buffer full; process what we have.
+            int n = SSL_read(ssl_, read_buffer_.data() + read_buffer_fill_,
+                             static_cast<int>(std::min<size_t>(space, INT_MAX)));
+            if (n > 0) {
+                read_buffer_fill_ += static_cast<size_t>(n);
+                total += static_cast<size_t>(n);
+                continue;
+            }
+            int err = SSL_get_error(ssl_, n);
+            if (err == SSL_ERROR_WANT_READ)  { tls_want_ = TlsWant::Read;  break; }
+            if (err == SSL_ERROR_WANT_WRITE) { tls_want_ = TlsWant::Write; break; }
+            if (err == SSL_ERROR_ZERO_RETURN) { // peer sent close_notify
+                return total > 0 ? static_cast<ssize_t>(total) : 0;
+            }
+            if (total > 0) break; // Surface the error on the next read.
+            ORE_LOG(ERROR) << "SSL_read error on socket " << socket_fd_;
+            return -1;
+        }
+        if (total > 0) { update_activity(); return static_cast<ssize_t>(total); }
+        return kReadWouldBlock;
     }
 
     ssize_t bytes_read = recv(socket_fd_, read_buffer_.data() + read_buffer_fill_, available_space, 0);
@@ -96,6 +143,67 @@ ssize_t Connection::read_data() {
 
 ssize_t Connection::write_data() {
     if (socket_fd_ < 0) return 0; // Connection already closed
+
+    // TLS path: sendfile() cannot encrypt, so file bodies are read into a buffer
+    // and written through SSL_write like any other body.
+    if (ssl_ != nullptr) {
+        ssize_t sent = 0;
+        if (!headers_sent_) {
+            while (!raw_headers_to_send_.empty()) {
+                int n = SSL_write(ssl_, raw_headers_to_send_.data(),
+                                  static_cast<int>(std::min<size_t>(raw_headers_to_send_.size(), INT_MAX)));
+                if (n > 0) { sent += n; raw_headers_to_send_.erase(0, static_cast<size_t>(n)); continue; }
+                int err = SSL_get_error(ssl_, n);
+                if (err == SSL_ERROR_WANT_WRITE) { tls_want_ = TlsWant::Write; return sent; }
+                if (err == SSL_ERROR_WANT_READ)  { tls_want_ = TlsWant::Read;  return sent; }
+                ORE_LOG(ERROR) << "SSL_write (headers) error on socket " << socket_fd_;
+                return -1;
+            }
+            headers_sent_ = true;
+        }
+        if (head_only_) { update_activity(); return sent; }
+
+        if (file_fd_ >= 0) {
+            char buf[16384];
+            while (file_remaining_ > 0) {
+                size_t want = std::min<size_t>(static_cast<size_t>(file_remaining_), sizeof(buf));
+                ssize_t r = pread(file_fd_, buf, want, file_offset_);
+                if (r <= 0) break; // Unexpected EOF (file shrank); stop.
+                int n = SSL_write(ssl_, buf, static_cast<int>(r));
+                if (n > 0) {
+                    file_offset_ += n;
+                    file_remaining_ -= n;
+                    sent += n;
+                    continue;
+                }
+                int err = SSL_get_error(ssl_, n);
+                if (err == SSL_ERROR_WANT_WRITE) { tls_want_ = TlsWant::Write; return sent; }
+                if (err == SSL_ERROR_WANT_READ)  { tls_want_ = TlsWant::Read;  return sent; }
+                ORE_LOG(ERROR) << "SSL_write (file) error on socket " << socket_fd_;
+                return -1;
+            }
+            if (file_remaining_ <= 0 && file_fd_ >= 0) { close(file_fd_); file_fd_ = -1; }
+            update_activity();
+            return sent;
+        }
+
+        if (write_body_offset_ < write_body_.size()) {
+            int n = SSL_write(ssl_, write_body_.data() + write_body_offset_,
+                              static_cast<int>(std::min<size_t>(write_body_.size() - write_body_offset_, INT_MAX)));
+            if (n > 0) {
+                write_body_offset_ += static_cast<size_t>(n);
+                sent += n;
+            } else {
+                int err = SSL_get_error(ssl_, n);
+                if (err == SSL_ERROR_WANT_WRITE) { tls_want_ = TlsWant::Write; return sent; }
+                if (err == SSL_ERROR_WANT_READ)  { tls_want_ = TlsWant::Read;  return sent; }
+                ORE_LOG(ERROR) << "SSL_write (body) error on socket " << socket_fd_;
+                return -1;
+            }
+        }
+        update_activity();
+        return sent;
+    }
 
     ssize_t bytes_sent_in_call = 0;
 
@@ -264,7 +372,11 @@ void Connection::maybe_send_100_continue() {
     if (value.find("100-continue") == std::string::npos) return;
 
     static const char kContinue[] = "HTTP/1.1 100 Continue\r\n\r\n";
-    ::send(socket_fd_, kContinue, sizeof(kContinue) - 1, MSG_NOSIGNAL); // best-effort
+    if (ssl_ != nullptr) {
+        SSL_write(ssl_, kContinue, sizeof(kContinue) - 1); // best-effort, over TLS
+    } else {
+        ::send(socket_fd_, kContinue, sizeof(kContinue) - 1, MSG_NOSIGNAL); // best-effort
+    }
     continue_sent_ = true;
 }
 
@@ -272,6 +384,13 @@ void Connection::close_connection() {
     if (file_fd_ >= 0) {
         close(file_fd_);
         file_fd_ = -1;
+    }
+    if (ssl_ != nullptr) {
+        // Best-effort close_notify; SSL_set_fd uses BIO_NOCLOSE so SSL_free does
+        // not close the socket (we close it ourselves below).
+        SSL_shutdown(ssl_);
+        SSL_free(ssl_);
+        ssl_ = nullptr;
     }
     if (socket_fd_ >= 0) {
         ORE_LOG(DEBUG) << "Closing connection " << socket_fd_;

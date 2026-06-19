@@ -191,6 +191,16 @@ int main(int argc, char** argv) {
             g_server_config.write_timeout_sec,
             g_server_config.idle_timeout_sec,
             g_server_config.shutdown_grace_sec});
+
+        // Enable HTTPS if configured (throws on an invalid certificate/key).
+        if (g_server_config.tls.enabled) {
+            if (g_server_config.tls.cert_file.empty() || g_server_config.tls.key_file.empty()) {
+                std::cerr << "TLS enabled but tls.cert_file/tls.key_file not set" << std::endl;
+                return 1;
+            }
+            server.enable_tls(g_server_config.tls.cert_file, g_server_config.tls.key_file,
+                              g_server_config.tls.min_version);
+        }
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers

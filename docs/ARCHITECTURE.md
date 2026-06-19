@@ -30,6 +30,7 @@ Oreshnek es un framework HTTP en C++20 con patrón **reactor**:
 | `Platform::Config` | Carga `ServerConfig` desde fichero JSON + overrides por entorno. |
 | `DatabaseManager` | Frontera sobre los backends (`std::variant` + `std::visit`, sin `virtual`). |
 | `SqliteBackend` / `PgBackend` | Concretos CRTP: SQLite3 (`SqlitePool`/WAL) y PostgreSQL (`PgPool`/libpq). |
+| `Net::TlsContext` | Envuelve un `SSL_CTX` de servidor (cert/key); crea el `SSL` por conexión. |
 | `Utils::Logger` | Logging estructurado thread-safe con sink a fichero y rotación (`ORE_LOG(LEVEL) << ...`). |
 
 ### Respuestas de fichero
@@ -150,6 +151,22 @@ prioridad: defaults → fichero JSON (todas las claves opcionales) → variables
 entorno (para secretos: `ORESHNEK_JWT_SECRET`, `ORESHNEK_PORT`, etc.). Un fichero
 ausente usa defaults; uno malformado lanza excepción. Ver
 [`config/oreshnek.example.json`](../config/oreshnek.example.json).
+
+## TLS / HTTPS
+
+Cuando `tls.enabled` está activo, el socket de escucha habla HTTPS. `Net::TlsContext`
+(compartido, solo lectura tras construirse) carga el certificado y la clave y crea
+un `SSL` por conexión en el `accept`. El **handshake es no bloqueante** y lo conduce
+el event loop: en cada evento, si el handshake no está completo, se llama a
+`SSL_accept` y se re-arma para lectura o escritura según `WANT_READ`/`WANT_WRITE`;
+solo al completarse empieza el I/O HTTP. Las lecturas drenan `SSL_read` en bucle
+(necesario con disparo por flanco + el buffer interno de OpenSSL) y las escrituras
+usan `SSL_write`. Como `sendfile()` no puede cifrar, el cuerpo de fichero se sirve
+con `pread`+`SSL_write`. El cierre hace `SSL_shutdown`/`SSL_free` (el `fd` lo cierra
+`Connection`, ya que `SSL_set_fd` usa `BIO_NOCLOSE`).
+
+> Es un único puerto TLS (HTTPS-only cuando se activa); HTTP+HTTPS simultáneos en
+> puertos distintos queda como trabajo futuro.
 
 ## Persistencia (abstracción de backend)
 

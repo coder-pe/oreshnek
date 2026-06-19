@@ -42,6 +42,14 @@
     }
   },
 
+  "tls": {
+    "_comment": "When enabled the listen port speaks HTTPS. Prefer ORESHNEK_TLS_CERT / ORESHNEK_TLS_KEY for paths.",
+    "enabled": false,
+    "cert_file": "",
+    "key_file": "",
+    "min_version": "1.2"
+  },
+
   "cors_enabled": false,
   "cors_allow_origin": "*"
 }

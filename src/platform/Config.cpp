@@ -89,6 +89,13 @@ ServerConfig Config::load(const std::string& path) {
                 }
             }
 
+            if (auto tls = config.find("tls"); tls != config.end() && tls->is_object()) {
+                assign_if_present(*tls, "enabled", cfg.tls.enabled);
+                assign_if_present(*tls, "cert_file", cfg.tls.cert_file);
+                assign_if_present(*tls, "key_file", cfg.tls.key_file);
+                assign_if_present(*tls, "min_version", cfg.tls.min_version);
+            }
+
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);
             assign_if_present(config, "cors_allow_origin", cfg.cors_allow_origin);
 
@@ -108,6 +115,8 @@ ServerConfig Config::load(const std::string& path) {
     if (const char* v = env_or_null("ORESHNEK_DB_PATH"))      cfg.db.sqlite_path = v;
     if (const char* v = env_or_null("ORESHNEK_PG_PASSWORD"))  cfg.db.pg_password = v;
     if (const char* v = env_or_null("ORESHNEK_DATABASE_URL")) cfg.db.pg_url = v;
+    if (const char* v = env_or_null("ORESHNEK_TLS_CERT"))     cfg.tls.cert_file = v;
+    if (const char* v = env_or_null("ORESHNEK_TLS_KEY"))      cfg.tls.key_file = v;
     if (const char* v = env_or_null("ORESHNEK_PORT")) {
         try { cfg.port = std::stoi(v); } catch (const std::exception&) {
             ORE_LOG(WARN) << "Ignoring non-numeric ORESHNEK_PORT='" << v << "'";
