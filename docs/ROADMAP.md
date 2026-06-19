@@ -116,11 +116,16 @@ backend ligero (dev/tests/embebido). Diseño detallado en
 - ✅ Extensible a futuro (Oracle, MySQL, MongoDB, ClickHouse, DB2, ...) añadiendo
   concretos al `std::variant`.
 
-## Fase 6 — TLS y rendimiento ⬜
+## Fase 6 — TLS y rendimiento 🔄
 
-- ⬜ TLS con OpenSSL (handshake no bloqueante).
+- ✅ **TLS con OpenSSL** (handshake no bloqueante integrado en el event loop):
+  `Net::TlsContext` carga cert/key; `SSL_accept`/`SSL_read`/`SSL_write` con
+  re-armado por `WANT_READ`/`WANT_WRITE`; cuerpo de fichero vía `pread`+`SSL_write`
+  (sendfile no cifra). Activable por `tls.enabled`; cert/key por config o entorno
+  (`ORESHNEK_TLS_CERT`/`ORESHNEK_TLS_KEY`). Test `tls_test` (verde normal/ASan/TSan).
+- ✅ **Envío de body optimizado** con offset en vez de `erase(0,n)` O(n²) — ya
+  resuelto en la Fase 3 (`write_body_offset_`).
 - ⬜ Rate limiting (token bucket por IP).
 - ⬜ Métricas Prometheus (`/metrics`).
-- ⬜ Optimizar envío de body (`erase(0,n)` es O(n²) → offset).
 - ⬜ Timeout de handler (`504`) con cancelación cooperativa de workers.
 - ⬜ (Opcional) compresión gzip/brotli, HTTP/2 (`nghttp2`).
