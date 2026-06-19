@@ -158,6 +158,11 @@ ausente usa defaults; uno malformado lanza excepción. Ver
 (RAII) por operación, en lugar de serializar todo en un mutex global, lo que
 permite consultas en paralelo desde los workers.
 
+> **Próximo (Fase 5):** `DatabaseManager` se convierte en una frontera con una
+> **abstracción de backend sin `virtual`** (CRTP + `concept` + `std::variant`) y dos
+> concretos: SQLite3 (el actual) y **PostgreSQL** (vía `libpq`), que pasa a ser la
+> base de datos principal. Diseño en [DATABASE.md](DATABASE.md).
+
 ## Logging
 
 Todo el logging del framework pasa por `Utils::Logger`, un sink protegido por
