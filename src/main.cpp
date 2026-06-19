@@ -179,10 +179,9 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(g_server_config.static_dir); //
 
 
-        // Create DatabaseManager instance (WAL connection pool sized from config).
-        Oreshnek::Platform::DatabaseManager db_manager(
-            g_server_config.db_path, g_server_config.db_pool_size,
-            g_server_config.db_busy_timeout_ms);
+        // Create DatabaseManager instance. The concrete backend (SQLite or
+        // PostgreSQL) is selected from the configuration.
+        Oreshnek::Platform::DatabaseManager db_manager(g_server_config);
         g_db_manager = &db_manager; // Set global pointer
 
         // Create server instance

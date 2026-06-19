@@ -55,7 +55,6 @@ ServerConfig Config::load(const std::string& path) {
             assign_if_present(config, "thread_pool_size", cfg.thread_pool_size);
             assign_if_present(config, "upload_dir", cfg.upload_dir);
             assign_if_present(config, "static_dir", cfg.static_dir);
-            assign_if_present(config, "db_path", cfg.db_path);
             assign_if_present(config, "jwt_secret", cfg.jwt_secret);
             assign_if_present(config, "jwt_expire_hours", cfg.jwt_expire_hours);
             assign_if_present(config, "max_file_size", cfg.max_file_size);
@@ -70,8 +69,25 @@ ServerConfig Config::load(const std::string& path) {
             assign_if_present(config, "log_max_bytes", cfg.log_max_bytes);
             assign_if_present(config, "log_max_files", cfg.log_max_files);
 
-            assign_if_present(config, "db_pool_size", cfg.db_pool_size);
-            assign_if_present(config, "db_busy_timeout_ms", cfg.db_busy_timeout_ms);
+            if (auto db = config.find("db"); db != config.end() && db->is_object()) {
+                assign_if_present(*db, "backend", cfg.db.backend);
+                if (auto s = db->find("sqlite"); s != db->end() && s->is_object()) {
+                    assign_if_present(*s, "path", cfg.db.sqlite_path);
+                    assign_if_present(*s, "pool_size", cfg.db.sqlite_pool_size);
+                    assign_if_present(*s, "busy_timeout_ms", cfg.db.sqlite_busy_timeout_ms);
+                }
+                if (auto p = db->find("postgres"); p != db->end() && p->is_object()) {
+                    assign_if_present(*p, "host", cfg.db.pg_host);
+                    assign_if_present(*p, "port", cfg.db.pg_port);
+                    assign_if_present(*p, "dbname", cfg.db.pg_dbname);
+                    assign_if_present(*p, "user", cfg.db.pg_user);
+                    assign_if_present(*p, "password", cfg.db.pg_password);
+                    assign_if_present(*p, "sslmode", cfg.db.pg_sslmode);
+                    assign_if_present(*p, "pool_size", cfg.db.pg_pool_size);
+                    assign_if_present(*p, "connect_timeout_sec", cfg.db.pg_connect_timeout_sec);
+                    assign_if_present(*p, "url", cfg.db.pg_url);
+                }
+            }
 
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);
             assign_if_present(config, "cors_allow_origin", cfg.cors_allow_origin);
@@ -84,11 +100,14 @@ ServerConfig Config::load(const std::string& path) {
     }
 
     // --- 2) Environment overrides (secrets out of the file) -----------------
-    if (const char* v = env_or_null("ORESHNEK_JWT_SECRET")) cfg.jwt_secret = v;
-    if (const char* v = env_or_null("ORESHNEK_HOST"))       cfg.host = v;
-    if (const char* v = env_or_null("ORESHNEK_DB_PATH"))    cfg.db_path = v;
-    if (const char* v = env_or_null("ORESHNEK_LOG_LEVEL"))  cfg.log_level = v;
-    if (const char* v = env_or_null("ORESHNEK_LOG_FILE"))   cfg.log_file = v;
+    if (const char* v = env_or_null("ORESHNEK_JWT_SECRET"))   cfg.jwt_secret = v;
+    if (const char* v = env_or_null("ORESHNEK_HOST"))         cfg.host = v;
+    if (const char* v = env_or_null("ORESHNEK_LOG_LEVEL"))    cfg.log_level = v;
+    if (const char* v = env_or_null("ORESHNEK_LOG_FILE"))     cfg.log_file = v;
+    if (const char* v = env_or_null("ORESHNEK_DB_BACKEND"))   cfg.db.backend = v;
+    if (const char* v = env_or_null("ORESHNEK_DB_PATH"))      cfg.db.sqlite_path = v;
+    if (const char* v = env_or_null("ORESHNEK_PG_PASSWORD"))  cfg.db.pg_password = v;
+    if (const char* v = env_or_null("ORESHNEK_DATABASE_URL")) cfg.db.pg_url = v;
     if (const char* v = env_or_null("ORESHNEK_PORT")) {
         try { cfg.port = std::stoi(v); } catch (const std::exception&) {
             ORE_LOG(WARN) << "Ignoring non-numeric ORESHNEK_PORT='" << v << "'";

@@ -6,7 +6,6 @@
 
   "upload_dir": "./uploads/",
   "static_dir": "./static/",
-  "db_path": "./database.db",
   "max_file_size": 524288000,
 
   "_comment_secret": "Prefer the ORESHNEK_JWT_SECRET environment variable over committing this.",
@@ -23,8 +22,25 @@
   "log_max_bytes": 10485760,
   "log_max_files": 5,
 
-  "db_pool_size": 4,
-  "db_busy_timeout_ms": 5000,
+  "db": {
+    "backend": "sqlite",
+    "sqlite": {
+      "path": "./database.db",
+      "pool_size": 4,
+      "busy_timeout_ms": 5000
+    },
+    "postgres": {
+      "_comment": "Prefer ORESHNEK_PG_PASSWORD / ORESHNEK_DATABASE_URL for secrets.",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "dbname": "oreshnek",
+      "user": "oreshnek",
+      "password": "",
+      "sslmode": "prefer",
+      "pool_size": 8,
+      "connect_timeout_sec": 5
+    }
+  },
 
   "cors_enabled": false,
   "cors_allow_origin": "*"
