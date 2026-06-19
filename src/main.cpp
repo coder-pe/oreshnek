@@ -1,11 +1,15 @@
 // src/main.cpp
 #include "oreshnek/Oreshnek.h" // Include the convenience header
 #include "oreshnek/http/Multipart.h" // Multipart/form-data parser
+#include "oreshnek/server/Middleware.h"        // Built-in middlewares
+#include "oreshnek/platform/Config.h"          // External configuration loader
 #include "oreshnek/platform/DatabaseManager.h" // Include your DatabaseManager
 #include "oreshnek/platform/SecurityUtils.h"   // Include your SecurityUtils
+#include "oreshnek/utils/Logger.h"             // Structured logging
 
 #include <iostream>
 #include <signal.h>
+#include <cstdlib> // For std::getenv
 #include <ctime> // For std::time
 #include <filesystem> // For creating directories
 #include <fstream> // For file operations
@@ -141,35 +145,67 @@ std::optional<std::string> resolve_within_dir(const std::string& base_dir,
     return target_str;
 }
 
-int main() {
+int main(int argc, char** argv) {
     // Writing to a socket whose peer has closed would otherwise raise SIGPIPE and
     // terminate the process; ignore it and rely on send()/EPIPE error handling.
     signal(SIGPIPE, SIG_IGN);
     try {
-        // Initialize ServerConfig
-        // You can load this from a file later (e.g., JSON, TOML)
-        g_server_config.port = 8080;
-        g_server_config.jwt_secret = "my-super-secret-jwt-key-for-oreshnek-platform-tutorial-streaming"; //
-        g_server_config.upload_dir = "./uploads/";
-        g_server_config.static_dir = "./static/";
-        g_server_config.db_path = "./database.db";
+        // Load configuration: explicit path (argv[1]) > $ORESHNEK_CONFIG >
+        // "./oreshnek.json". Secrets (JWT) can be supplied via env so they stay
+        // out of the config file / VCS.
+        std::string config_path = "oreshnek.json";
+        if (argc > 1) {
+            config_path = argv[1];
+        } else if (const char* env_path = std::getenv("ORESHNEK_CONFIG")) {
+            config_path = env_path;
+        }
+        g_server_config = Oreshnek::Platform::Config::load(config_path);
+
+        // Initialize structured logging from the configuration.
+        auto& logger = Oreshnek::Utils::Logger::instance();
+        logger.set_level(Oreshnek::Utils::level_from_string(g_server_config.log_level));
+        if (!g_server_config.log_file.empty()) {
+            if (!logger.set_file(g_server_config.log_file, g_server_config.log_max_bytes,
+                                 g_server_config.log_max_files)) {
+                ORE_LOG(WARN) << "Could not open log file '" << g_server_config.log_file
+                              << "'; logging to stderr.";
+            }
+        }
+        ORE_LOG(INFO) << "Oreshnek starting on " << g_server_config.host << ":"
+                      << g_server_config.port;
 
         // Create necessary directories
         std::filesystem::create_directories(g_server_config.upload_dir); //
         std::filesystem::create_directories(g_server_config.static_dir); //
 
 
-        // Create DatabaseManager instance
-        Oreshnek::Platform::DatabaseManager db_manager(g_server_config.db_path); //
+        // Create DatabaseManager instance (WAL connection pool sized from config).
+        Oreshnek::Platform::DatabaseManager db_manager(
+            g_server_config.db_path, g_server_config.db_pool_size,
+            g_server_config.db_busy_timeout_ms);
         g_db_manager = &db_manager; // Set global pointer
 
         // Create server instance
         Oreshnek::Server::Server server(g_server_config.thread_pool_size); //
+        server.configure(Oreshnek::Server::Server::Settings{
+            g_server_config.read_timeout_sec,
+            g_server_config.write_timeout_sec,
+            g_server_config.idle_timeout_sec,
+            g_server_config.shutdown_grace_sec});
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers
         signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
+
+        // --- Cross-cutting middleware (run before handlers, in this order) ---
+        namespace MW = Oreshnek::Server::Middlewares;
+        server.use(MW::request_logger());
+        if (g_server_config.cors_enabled) {
+            server.use(MW::cors(g_server_config.cors_allow_origin));
+        }
+        // Reject uploads without a valid bearer token before reaching the handler.
+        server.use(MW::require_jwt(g_server_config.jwt_secret, {"/api/upload"}));
 
         // --- Define API routes for the Video Streaming Platform ---
 

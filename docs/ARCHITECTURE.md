@@ -1,8 +1,8 @@
 # Arquitectura de Oreshnek
 
-Este documento describe el modelo de ejecución del framework tras la **Fase 1**
-de endurecimiento (modelo de concurrencia seguro). Para el plan completo de
-madurez a producción, ver [ROADMAP.md](ROADMAP.md).
+Este documento describe el modelo de ejecución del framework tras la **Fase 4**
+de endurecimiento (concurrencia segura + robustez productiva). Para el plan
+completo de madurez a producción, ver [ROADMAP.md](ROADMAP.md).
 
 ## Visión general
 
@@ -23,10 +23,13 @@ Oreshnek es un framework HTTP en C++20 con patrón **reactor**:
 | `HttpRequest` | Petición parseada. Puede *poseer* sus bytes (`make_owned`) para cruzar el límite de hilos sin punteros colgantes. |
 | `HttpResponse` | Construye la respuesta (`body`, `file`, `json`, `text`, `html`); lleva rango de fichero y flag HEAD. |
 | `Http::Multipart` | Parser `multipart/form-data` (zero-copy sobre el cuerpo). |
-| JSON | `Oreshnek::Json::JsonValue` es un alias de `nlohmann::json`. |
+| JSON | `nlohmann::json` directo (sin capa de alias propia). |
 | `Router` | Enrutado trie segmento a segmento. |
+| `Middleware` | Filtros encadenables ejecutados antes del handler (`Server::use`). |
 | `ThreadPool` | Workers que consumen tareas de una cola. |
-| `Utils::Logger` | Sink de logging thread-safe (`ORE_LOG(LEVEL) << ...`). |
+| `Platform::Config` | Carga `ServerConfig` desde fichero JSON + overrides por entorno. |
+| `Platform::SqlitePool` | Pool de conexiones SQLite en WAL con `busy_timeout`. |
+| `Utils::Logger` | Logging estructurado thread-safe con sink a fichero y rotación (`ORE_LOG(LEVEL) << ...`). |
 
 ### Respuestas de fichero
 
@@ -51,7 +54,8 @@ El principio central: **solo el hilo del event loop toca los objetos
                request->make_owned(buffer, consumed) ───────►│  (request es dueño de sus bytes)
                consume(consumed)                             │
                conn->processing_ = true                      │
-               thread_pool.enqueue(task) ──────────────────► │  router->find_route()
+               thread_pool.enqueue(task) ──────────────────► │  middlewares (Server::use)
+                                                             │  router->find_route()
                                                              │  handler(request, response)
                                                              │  push {fd, conn(shared), response}
                                                              │       a la cola de finalización
@@ -82,11 +86,16 @@ El principio central: **solo el hilo del event loop toca los objetos
   conexión** (`processing_`). Las peticiones pipelined se sirven en orden, una tras
   otra, al terminar de escribir cada respuesta.
 
-## Contrato de apagado (thread-safe)
+## Contrato de apagado graceful (thread-safe)
 
 - `request_stop()` es **async-signal-safe**: solo escribe un atómico
-  (`running_ = false`) y un byte al self-pipe. Es lo único que debe invocar un
-  manejador de señales.
+  (`stop_requested_ = true`) y un byte al self-pipe. Es lo único que debe invocar
+  un manejador de señales.
+- Al observar `stop_requested_`, el event loop entra en **fase de drenado**: deja
+  de aceptar conexiones (cierra el socket de escucha), termina las peticiones en
+  vuelo y vacía sus respuestas, cerrando cada conexión tras enviarla (no se
+  reutilizan keep-alive). Sale cuando no queda trabajo pendiente o cuando expira
+  `shutdown_grace_sec` (entonces descarta lo que quede).
 - `run()` hace el *teardown* de sus propios recursos (mapa de conexiones, fds de
   epoll/kqueue y escucha) **en su propio hilo** al salir del bucle.
 - El dueño del hilo de `run()` debe hacer `join` después de `request_stop()`.
@@ -110,10 +119,50 @@ En el `main.cpp` de ejemplo, `run()` es bloqueante en el hilo principal, así qu
 `run()` retorna y luego se llama `stop()` en el mismo hilo (secuencial, sin
 concurrencia).
 
+## Timeouts de conexión
+
+En cada barrido (cadencia 1 s) `enforce_timeouts()` recorre las conexiones que no
+tienen un worker en vuelo y aplica, según su estado:
+
+- **read_timeout** — una petición a medio recibir que no se completa: se responde
+  `408 Request Timeout` y se cierra.
+- **write_timeout** — una respuesta que el peer no termina de drenar: se cierra.
+- **idle_timeout** — una conexión keep-alive ociosa a la espera de otra petición:
+  se cierra.
+
+Los tres son configurables (`Server::Settings`, poblados desde `ServerConfig`); un
+valor de `0` desactiva el timeout correspondiente.
+
+## Middleware
+
+`Server::use(Middleware)` registra filtros `bool(const HttpRequest&, HttpResponse&)`
+que se ejecutan **en el worker, antes del handler**, en orden de registro. Devolver
+`false` corta la cadena: la respuesta ya construida se envía tal cual y el handler
+no se invoca (rechazo de auth, preflight CORS...). `Middleware.h` incluye factorías
+listas: `cors()`, `request_logger()` y `require_jwt(secret, prefijos)`. La cadena
+se llena antes de `run()` y los workers solo la leen (sin mutación concurrente).
+
+## Configuración
+
+`Platform::Config::load(path)` construye un `ServerConfig` combinando, en orden de
+prioridad: defaults → fichero JSON (todas las claves opcionales) → variables de
+entorno (para secretos: `ORESHNEK_JWT_SECRET`, `ORESHNEK_PORT`, etc.). Un fichero
+ausente usa defaults; uno malformado lanza excepción. Ver
+[`config/oreshnek.example.json`](../config/oreshnek.example.json).
+
+## Persistencia (SQLite)
+
+`Platform::SqlitePool` mantiene N conexiones a un mismo fichero, cada una en modo
+**WAL** (lectores concurrentes + un escritor), con `synchronous=NORMAL`,
+`foreign_keys=ON` y `busy_timeout`. `DatabaseManager` toma una conexión del pool
+(RAII) por operación, en lugar de serializar todo en un mutex global, lo que
+permite consultas en paralelo desde los workers.
+
 ## Logging
 
 Todo el logging del framework pasa por `Utils::Logger`, un sink protegido por
 mutex, vía la macro `ORE_LOG(LEVEL) << ...` (niveles `TRACE/DEBUG/INFO/WARN/ERROR`).
-Esto elimina las data races por uso concurrente de `std::cout`/`std::cerr` desde
-varios hilos. Es un stop-gap hasta integrar un backend estructurado (p. ej.
-spdlog) en la Fase 4.
+Cada línea lleva timestamp, nivel y thread-id. Por defecto escribe a `std::clog`;
+con `set_file()` escribe a fichero con **rotación por tamaño** (`<path>.1`, `.2`,
+... hasta `log_max_files`). El nivel y el destino se toman de la configuración. Se
+mantiene una implementación propia (sin añadir spdlog) para minimizar dependencias.

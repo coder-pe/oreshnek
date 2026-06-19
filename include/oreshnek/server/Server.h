@@ -12,8 +12,10 @@
 #include <unordered_map>
 #include <memory>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <queue>
+#include <vector>
 
 #ifdef __linux__
 #include <sys/epoll.h> // For epoll structures on Linux
@@ -25,6 +27,13 @@
 namespace Oreshnek {
 namespace Server {
 
+// A middleware runs (in the worker thread) before the route handler. Returning
+// false short-circuits the chain: the response already set is sent as-is and the
+// handler is not invoked (e.g. an auth check that rejected the request, or a
+// CORS preflight answered with 204). Returning true continues to the next
+// middleware and ultimately the handler.
+using Middleware = std::function<bool(const Http::HttpRequest&, Http::HttpResponse&)>;
+
 class Server {
 private:
     int listen_fd_; // Listening socket file descriptor
@@ -34,9 +43,19 @@ private:
     int kqueue_fd_; // Kqueue instance file descriptor
 #endif
     std::atomic<bool> running_; // Flag to control server loop
+    // Set by request_stop() (async-signal-safe). The event loop observes it and
+    // transitions into a graceful drain rather than tearing down immediately.
+    std::atomic<bool> stop_requested_{false};
+    // True once the loop has begun draining for shutdown. Touched only by the
+    // event-loop thread.
+    bool draining_ = false;
 
     std::unique_ptr<Router> router_;
     std::unique_ptr<ThreadPool> thread_pool_;
+
+    // Middleware chain, run before the handler in registration order. Populated
+    // before run() and only read (never mutated) by worker threads afterwards.
+    std::vector<Middleware> middlewares_;
 
     // Map of active connections, indexed by their socket FD.
     // Only the event-loop thread mutates this map or the Connection objects.
@@ -61,10 +80,29 @@ private:
 
     static constexpr int MAX_EVENTS = 1024;
     static constexpr int BACKLOG = 1024; // Listen backlog for new connections
+    static constexpr int kCleanupIntervalSec = 1; // Timeout-sweep cadence.
 
 public:
+    // Tunables sourced from the external configuration. Kept as a plain POD so
+    // Server stays decoupled from Platform::ServerConfig (and SQLite headers).
+    // A value of 0 disables the corresponding timeout.
+    struct Settings {
+        int read_timeout_sec = 30;     // Incomplete request header/body -> 408.
+        int write_timeout_sec = 30;    // Stalled response write -> drop.
+        int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
+        int shutdown_grace_sec = 10;   // Drain budget for graceful shutdown.
+    };
+
     Server(size_t worker_threads = std::thread::hardware_concurrency());
     ~Server();
+
+    // Apply runtime tunables. Call before listen()/run().
+    void configure(const Settings& settings) { settings_ = settings; }
+
+    // Register a middleware. Middlewares run before the matched handler in
+    // registration order. Call before listen()/run(); not thread-safe to call
+    // once the server is running.
+    void use(Middleware middleware) { middlewares_.push_back(std::move(middleware)); }
 
     // Route registration methods
     void get(const std::string& path, RouteHandler handler) {
@@ -123,8 +161,19 @@ private:
     void drain_wakeup();        // consume pending wakeup bytes
     void process_completions(); // write out responses queued by workers
 
-    // Connection cleanup
-    void cleanup_expired_connections();
+    // Stop accepting new connections (close/deregister the listen socket) at the
+    // start of a graceful drain.
+    void stop_accepting();
+
+    // Enforce read/write/idle timeouts: close connections that have stalled. A
+    // connection still buffering a request past read_timeout gets a 408 first.
+    void enforce_timeouts();
+
+    // Best-effort "408 Request Timeout" written synchronously before closing a
+    // connection that took too long to send its request.
+    void send_request_timeout(int fd);
+
+    Settings settings_;
 };
 
 } // namespace Server
