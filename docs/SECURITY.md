@@ -32,8 +32,11 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
   3. **Expiración**: el claim `exp` es obligatorio y debe ser futuro.
 - `decodeJWT(token)` solo decodifica el payload y **debe llamarse después** de que
   `validateJWT` haya devuelto `true`.
-- El secreto JWT no debe estar hardcodeado en producción (pendiente Fase 4:
-  cargarlo de entorno/fichero).
+- El secreto JWT sale del código (Fase 4): se carga del fichero de configuración o,
+  preferentemente, de la variable de entorno `ORESHNEK_JWT_SECRET`. El loader avisa
+  por log si se sigue usando el valor por defecto.
+- El middleware `require_jwt(secret, prefijos)` permite exigir un Bearer token
+  válido en rutas protegidas antes de llegar al handler (responde `401`).
 
 ## Directory traversal
 
@@ -57,8 +60,15 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
   `MSG_NOSIGNAL` en cada `send()` (Linux) y `SO_NOSIGPIPE` en los sockets aceptados
   (macOS). Escribir a un peer cerrado produce `EPIPE` gestionable, no una señal.
 
+## Timeouts (anti-recurso-colgado)
+
+- Read/idle/write timeouts cierran conexiones que no progresan (cliente lento o
+  ausente); una petición incompleta recibe `408`. Configurables; mitigan ataques
+  de conexión lenta tipo Slowloris a nivel de conexión. Ver
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Pendiente (fases posteriores)
 
 - TLS/HTTPS (Fase 5), rate limiting (Fase 5).
-- Secreto JWT y configuración fuera del código (Fase 4).
-- Cabeceras de seguridad (HSTS, X-Frame-Options) y CORS (Fase 4).
+- Cabeceras de seguridad (HSTS, X-Frame-Options) además del CORS ya disponible.
+- Timeout de handler (`504`) con cancelación cooperativa de workers (Fase 5).

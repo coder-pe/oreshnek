@@ -2,8 +2,9 @@
 
 Plan progresivo para llevar Oreshnek de "demo funcional" a "listo para
 producción". Política de dependencias: minimizar y usar solo librerías muy
-maduras (nlohmann/json, OpenSSL, SQLite, libsodium, spdlog). El núcleo (parser
-HTTP, router, multipart, thread pool) se mantiene propio.
+maduras (nlohmann/json, OpenSSL, SQLite; libsodium como opción futura). El núcleo
+(parser HTTP, router, multipart, thread pool, logging y configuración) se mantiene
+propio; en particular el logging es propio (no se añadió spdlog).
 
 Leyenda: ✅ hecho · 🔄 en progreso · ⬜ pendiente
 
@@ -67,14 +68,30 @@ Leyenda: ✅ hecho · 🔄 en progreso · ⬜ pendiente
 Nota: el cuerpo de la petición aún se almacena completo en el buffer de lectura
 (1 MiB); el streaming de cuerpos grandes a disco queda para más adelante.
 
-## Fase 4 — Robustez productiva ⬜ (siguiente)
+## Fase 4 — Robustez productiva ✅
 
-- ⬜ Shutdown graceful (drenar peticiones en vuelo con deadline).
-- ⬜ Timeouts de lectura/escritura/idle (`408`/`504`).
-- ⬜ Logging estructurado (spdlog) con niveles y rotación.
-- ⬜ Configuración externa (fichero); secreto JWT vía env/fichero.
-- ⬜ SQLite: WAL + `busy_timeout` + pool de conexiones.
-- ⬜ Middleware/filtros encadenables (auth, CORS, logging, compresión).
+- ✅ **Shutdown graceful**: `request_stop()` marca `stop_requested_` y el event
+  loop entra en drenado (deja de aceptar, termina peticiones en vuelo y vacía sus
+  respuestas, cerrando cada conexión); sale al quedar sin trabajo o al expirar
+  `shutdown_grace_sec`.
+- ✅ **Timeouts** de lectura (`408`), escritura e idle, configurables (cadencia de
+  barrido 1 s; `0` desactiva cada uno).
+- ✅ **Logging estructurado**: timestamp + nivel + thread-id, sink a fichero con
+  rotación por tamaño, nivel y destino desde configuración. Implementación propia
+  (sin spdlog) para minimizar dependencias.
+- ✅ **Configuración externa** (`Platform::Config`): fichero JSON + overrides por
+  entorno; el secreto JWT sale del código (`ORESHNEK_JWT_SECRET`).
+  Ver `config/oreshnek.example.json`.
+- ✅ **SQLite**: pool de conexiones (`SqlitePool`) en WAL + `synchronous=NORMAL` +
+  `foreign_keys=ON` + `busy_timeout`; `DatabaseManager` sin mutex global.
+- ✅ **Middleware** encadenable (`Server::use`) con short-circuit; built-ins
+  `cors()`, `request_logger()`, `require_jwt()`.
+- ✅ Tests: `lifecycle_test` (drenado + 408), `db_test` (pool/WAL concurrente),
+  `middleware_test` (orden, short-circuit, CORS, JWT). Verde en normal, ASan/UBSan
+  y TSan.
+
+Pendiente (movido a fases posteriores): compresión gzip/brotli como middleware;
+timeout de handler (`504`) — requiere cancelación cooperativa de los workers.
 
 ## Fase 5 — TLS y rendimiento ⬜
 
