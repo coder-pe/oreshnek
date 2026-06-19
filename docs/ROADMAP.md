@@ -2,9 +2,10 @@
 
 Plan progresivo para llevar Oreshnek de "demo funcional" a "listo para
 producción". Política de dependencias: minimizar y usar solo librerías muy
-maduras (nlohmann/json, OpenSSL, SQLite; libsodium como opción futura). El núcleo
-(parser HTTP, router, multipart, thread pool, logging y configuración) se mantiene
-propio; en particular el logging es propio (no se añadió spdlog).
+maduras (nlohmann/json, OpenSSL, SQLite, libpq; libsodium como opción futura). El
+núcleo (parser HTTP, router, multipart, thread pool, logging y configuración) se
+mantiene propio; en particular el logging es propio (no se añadió spdlog) y para
+PostgreSQL se usa `libpq` (cliente C oficial), no `libpqxx`.
 
 Leyenda: ✅ hecho · 🔄 en progreso · ⬜ pendiente
 
@@ -93,25 +94,26 @@ Nota: el cuerpo de la petición aún se almacena completo en el buffer de lectur
 Pendiente (movido a fases posteriores): compresión gzip/brotli como middleware;
 timeout de handler (`504`) — requiere cancelación cooperativa de los workers.
 
-## Fase 5 — Capa de persistencia y PostgreSQL ⬜ (siguiente)
+## Fase 5 — Capa de persistencia y PostgreSQL ✅
 
 PostgreSQL pasa a ser la base de datos **principal**; SQLite3 se mantiene como
 backend ligero (dev/tests/embebido). Diseño detallado en
 [DATABASE.md](DATABASE.md).
 
-- ⬜ Abstracción **sin `virtual`**: `concept DatabaseBackend` + base **CRTP**
+- ✅ Abstracción **sin `virtual`**: `concept DatabaseBackend` + base **CRTP**
   `DatabaseBase<Derived>`; selección de backend en runtime con `std::variant` +
   `std::visit` en la frontera `DatabaseManager`.
-- ⬜ **Concreto SQLite3**: mover la lógica actual a `SqliteBackend` (reusa
-  `SqlitePool`), sin cambios de comportamiento.
-- ⬜ **Concreto PostgreSQL** vía **`libpq`** (cliente C oficial, sin añadir
-  `libpqxx`): `PgPool` (pool con RAII + reconexión), consultas parametrizadas
-  (`$n`, anti-inyección), `INSERT ... RETURNING id`, DDL en dialecto PostgreSQL.
-- ⬜ **Configuración**: sección `db` (`backend`, `sqlite`, `postgres`); secretos por
+- ✅ **Concreto SQLite3**: lógica movida a `SqliteBackend` (reusa `SqlitePool`),
+  sin cambios de comportamiento.
+- ✅ **Concreto PostgreSQL** vía **`libpq`** (cliente C oficial, sin `libpqxx`):
+  `PgPool` (pool con RAII + reconexión `PQreset`), consultas parametrizadas
+  (`$n`, anti-inyección), DDL en dialecto PostgreSQL (SERIAL/TIMESTAMPTZ/BOOLEAN).
+- ✅ **Configuración**: sección `db` (`backend`, `sqlite`, `postgres`); secretos por
   entorno (`ORESHNEK_PG_PASSWORD`, `ORESHNEK_DATABASE_URL`); `sslmode` configurable.
-- ⬜ **Tests**: `pg_test` (mismas aserciones que `db_test`) que se salta si no hay
-  PostgreSQL disponible; CI con servicio Postgres opcional.
-- ⬜ Extensible a futuro (Oracle, MySQL, MongoDB, ClickHouse, DB2, ...) añadiendo
+- ✅ **Tests**: `pg_test` (mismas aserciones que `db_test`) que se salta si no hay
+  `ORESHNEK_PG_TEST_DSN`; validado contra PostgreSQL 18 real en normal, ASan/UBSan
+  y TSan.
+- ✅ Extensible a futuro (Oracle, MySQL, MongoDB, ClickHouse, DB2, ...) añadiendo
   concretos al `std::variant`.
 
 ## Fase 6 — TLS y rendimiento ⬜

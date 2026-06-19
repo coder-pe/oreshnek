@@ -1,9 +1,9 @@
 # Capa de persistencia — abstracción y PostgreSQL
 
-Estado: **diseño / plan** (aún no implementado). Esta capa será la base de la
-**Fase 5** del [ROADMAP](ROADMAP.md). PostgreSQL pasa a ser la base de datos
-principal; SQLite3 se mantiene como backend ligero (desarrollo, tests, despliegues
-embebidos).
+Estado: **implementado** (Fase 5 del [ROADMAP](ROADMAP.md)). PostgreSQL es la base
+de datos principal; SQLite3 se mantiene como backend ligero (desarrollo, tests,
+despliegues embebidos). Este documento describe el diseño efectivamente
+implementado.
 
 ## Objetivos
 
