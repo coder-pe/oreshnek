@@ -18,7 +18,8 @@
 namespace Oreshnek {
 namespace Platform {
 
-// Configuration struct (from your platform_video_streaming.txt)
+// Configuration struct (from your platform_video_streaming.txt), now loadable
+// from an external JSON file (see Platform::Config::load).
 struct ServerConfig {
     int port = 8080;
     int max_connections = 1000;
@@ -30,6 +31,28 @@ struct ServerConfig {
     int jwt_expire_hours = 24;
     size_t max_file_size = 500 * 1024 * 1024; // 500MB
     std::string host = "0.0.0.0"; // Add this line
+
+    // --- Fase 4: robustez productiva ---------------------------------------
+    // Connection timeouts (seconds). 0 disables the corresponding timeout.
+    int read_timeout_sec = 30;     // Slow/incomplete request header+body -> 408.
+    int write_timeout_sec = 30;    // Stalled response write -> drop connection.
+    int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
+    // Graceful shutdown: how long to drain in-flight requests before forcing exit.
+    int shutdown_grace_sec = 10;
+
+    // Logging.
+    std::string log_level = "info";       // trace|debug|info|warn|error|off
+    std::string log_file;                 // empty -> stderr (std::clog)
+    std::size_t log_max_bytes = 10 * 1024 * 1024;
+    int log_max_files = 5;
+
+    // SQLite connection pool size (WAL allows concurrent readers).
+    int db_pool_size = 4;
+    int db_busy_timeout_ms = 5000;
+
+    // CORS (applied by the built-in CORS middleware when enabled).
+    bool cors_enabled = false;
+    std::string cors_allow_origin = "*";
 };
 
 // User struct (from your platform_video_streaming.txt) [cite: 64]
