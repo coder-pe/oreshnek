@@ -25,6 +25,7 @@
 #endif
 
 namespace Oreshnek {
+namespace Net { class TlsContext; }  // fwd-decl; defined in net/TlsContext.h
 namespace Server {
 
 // A middleware runs (in the worker thread) before the route handler. Returning
@@ -52,6 +53,9 @@ private:
 
     std::unique_ptr<Router> router_;
     std::unique_ptr<ThreadPool> thread_pool_;
+    // Non-null when TLS is enabled; shared (read-only) to mint per-connection
+    // SSL objects on accept.
+    std::unique_ptr<Net::TlsContext> tls_ctx_;
 
     // Middleware chain, run before the handler in registration order. Populated
     // before run() and only read (never mutated) by worker threads afterwards.
@@ -99,6 +103,12 @@ public:
     // Apply runtime tunables. Call before listen()/run().
     void configure(const Settings& settings) { settings_ = settings; }
 
+    // Enable TLS: the listen socket will speak HTTPS. Loads the certificate and
+    // key eagerly; throws std::runtime_error if they are invalid. Call before
+    // listen()/run().
+    void enable_tls(const std::string& cert_file, const std::string& key_file,
+                    const std::string& min_version);
+
     // Register a middleware. Middlewares run before the matched handler in
     // registration order. Call before listen()/run(); not thread-safe to call
     // once the server is running.
@@ -145,6 +155,11 @@ private:
     void handle_client_data(int fd);
     void handle_write_ready(int fd);
     void close_connection(int fd); // Helper to safely close and remove from map
+
+    // Drive a connection's pending TLS handshake. Returns true when the
+    // handshake is complete (caller may proceed with I/O); false when it is
+    // still in progress (re-armed) or the connection was closed on error.
+    bool drive_tls_handshake(int fd, const std::shared_ptr<Net::Connection>& conn);
 
     // Parse the next buffered request (if any) and hand it to a worker. At most
     // one request per connection is in flight at a time to preserve ordering.

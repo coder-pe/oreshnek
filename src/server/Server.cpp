@@ -1,5 +1,6 @@
 // oreshnek/src/server/Server.cpp
 #include "oreshnek/server/Server.h"
+#include "oreshnek/net/TlsContext.h"
 #include "oreshnek/utils/Logger.h"
 #include <iostream>
 #include <fcntl.h>    // For fcntl
@@ -123,6 +124,12 @@ Server::Server(size_t worker_threads)
 
 Server::~Server() {
     stop(); // Ensure proper shutdown
+}
+
+void Server::enable_tls(const std::string& cert_file, const std::string& key_file,
+                        const std::string& min_version) {
+    // Constructed eagerly so a bad certificate/key fails fast at startup.
+    tls_ctx_ = std::make_unique<Net::TlsContext>(cert_file, key_file, min_version);
 }
 
 void Server::set_non_blocking(int fd) {
@@ -533,7 +540,16 @@ void Server::handle_new_connection() {
             continue;
         }
 #endif
-        connections_[client_fd] = std::make_shared<Net::Connection>(client_fd);
+        auto conn = std::make_shared<Net::Connection>(client_fd);
+        if (tls_ctx_) {
+            SSL* ssl = tls_ctx_->new_session(client_fd);
+            if (ssl == nullptr) {
+                close(client_fd);
+                continue;
+            }
+            conn->set_ssl(ssl); // Handshake is driven lazily on the first event.
+        }
+        connections_[client_fd] = std::move(conn);
     }
 
     if (client_fd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -621,9 +637,23 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
     }
 
     // Incomplete request: if the client is waiting for "100 Continue" before
-    // sending the body, send it now, then wait for more data.
+    // sending the body, send it now, then wait for more data. Under TLS a read
+    // may have blocked needing writability, so re-arm in the requested direction.
     conn->maybe_send_100_continue();
-    rearm(fd, /*read=*/true);
+    const bool want_read =
+        !(conn->uses_tls() && conn->tls_want() == Net::Connection::TlsWant::Write);
+    rearm(fd, want_read);
+}
+
+bool Server::drive_tls_handshake(int fd, const std::shared_ptr<Net::Connection>& conn) {
+    int r = conn->continue_tls_handshake();
+    if (r == 1) return true; // Handshake complete; caller proceeds with I/O.
+    if (r == 0) {
+        rearm(fd, conn->tls_want() == Net::Connection::TlsWant::Read);
+        return false;
+    }
+    close_connection(fd); // r < 0: handshake error.
+    return false;
 }
 
 void Server::handle_client_data(int fd) {
@@ -634,6 +664,12 @@ void Server::handle_client_data(int fd) {
     if (!conn->is_open()) {
         close_connection(fd);
         return;
+    }
+
+    // Complete the TLS handshake before any HTTP I/O.
+    if (conn->uses_tls() && !conn->tls_handshake_done()) {
+        if (!drive_tls_handshake(fd, conn)) return;
+        // Handshake just finished on this readable event; fall through to read.
     }
 
     ssize_t bytes_read = conn->read_data();
@@ -657,6 +693,14 @@ void Server::handle_write_ready(int fd) {
 
     if (!conn->is_open()) {
         close_connection(fd);
+        return;
+    }
+
+    // A writable event during the handshake (SSL_accept wanted to write).
+    if (conn->uses_tls() && !conn->tls_handshake_done()) {
+        if (!drive_tls_handshake(fd, conn)) return;
+        // Handshake finished; now wait for the client's request.
+        rearm(fd, /*read=*/true);
         return;
     }
 
@@ -720,9 +764,17 @@ void Server::stop_accepting() {
 void Server::send_request_timeout(int fd) {
     auto it = connections_.find(fd);
     if (it == connections_.end() || !it->second->is_open()) return;
+    const auto& conn = it->second;
     static const char k408[] =
         "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-    ::send(it->second->socket_fd_, k408, sizeof(k408) - 1, MSG_NOSIGNAL); // best-effort
+    if (conn->uses_tls()) {
+        // Only meaningful once the TLS session exists; otherwise just close.
+        if (conn->tls_handshake_done()) {
+            SSL_write(conn->ssl_, k408, sizeof(k408) - 1); // best-effort over TLS
+        }
+    } else {
+        ::send(conn->socket_fd_, k408, sizeof(k408) - 1, MSG_NOSIGNAL); // best-effort
+    }
 }
 
 void Server::enforce_timeouts() {

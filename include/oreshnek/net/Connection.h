@@ -9,6 +9,7 @@
 #include <vector>
 #include <chrono>
 #include <sys/types.h> // For off_t
+#include <openssl/ssl.h> // For SSL (TLS connection state)
 
 namespace Oreshnek {
 namespace Net {
@@ -44,6 +45,15 @@ public:
 
     bool head_only_ = false;   // HEAD request: emit headers, suppress body
     bool continue_sent_ = false; // "100 Continue" already sent for current request
+
+    // --- TLS state (non-null ssl_ => this connection speaks TLS) -----------
+    SSL* ssl_ = nullptr;
+    bool tls_handshake_done_ = false;
+    // After a TLS op that would block, the direction OpenSSL needs next so the
+    // event loop can re-arm correctly (a read may need writability and vice
+    // versa during a handshake/renegotiation).
+    enum class TlsWant { Read, Write };
+    TlsWant tls_want_ = TlsWant::Read;
 
     Http::HttpParser http_parser_;
     Http::HttpRequest current_request_; // Holds the parsed request data
@@ -95,6 +105,18 @@ public:
     // "Expect: 100-continue", send a one-shot "100 Continue" so the client
     // starts uploading. No-op if already sent or not applicable.
     void maybe_send_100_continue();
+
+    // --- TLS -----------------------------------------------------------------
+    // Attach a freshly created (accept-state) SSL object; makes this a TLS conn.
+    void set_ssl(SSL* ssl) { ssl_ = ssl; }
+    bool uses_tls() const { return ssl_ != nullptr; }
+    bool tls_handshake_done() const { return tls_handshake_done_; }
+    TlsWant tls_want() const { return tls_want_; }
+
+    // Drive the non-blocking TLS handshake (SSL_accept). Returns 1 when the
+    // handshake is complete, 0 when it would block (check tls_want() for the
+    // direction to re-arm), and -1 on error (the connection should be closed).
+    int continue_tls_handshake();
 
     // Close the socket connection
     void close_connection();
