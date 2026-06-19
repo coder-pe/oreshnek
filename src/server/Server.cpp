@@ -22,6 +22,12 @@
 #include <sys/stat.h> // For stat (to get file size and check existence)
 #include <string>
 
+// Avoid SIGPIPE when writing a timeout response to a half-closed peer. No-op on
+// platforms without MSG_NOSIGNAL (macOS relies on SO_NOSIGPIPE / SIG_IGN).
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 namespace Oreshnek {
 namespace Server {
 
@@ -271,9 +277,11 @@ bool Server::listen(const std::string& host, int port) {
     return true;
 }
 
-// Async-signal-safe: only writes to an atomic and a pipe (both safe).
+// Async-signal-safe: only writes to atomics and a pipe (both safe). Requests a
+// graceful drain; the event loop decides when to actually exit (run() flips
+// running_ once in-flight work is drained or the grace period expires).
 void Server::request_stop() {
-    running_.store(false, std::memory_order_relaxed);
+    stop_requested_.store(true, std::memory_order_relaxed);
     notify_event_loop();
 }
 
@@ -347,12 +355,17 @@ void Server::run() {
     struct kevent events[MAX_EVENTS];
 #endif
     auto last_cleanup = std::chrono::steady_clock::now();
+    draining_ = false;
+    std::chrono::steady_clock::time_point drain_deadline;
 
     while (running_.load(std::memory_order_relaxed)) {
+        // While draining we poll more frequently so the grace deadline and the
+        // "all connections drained" condition are observed promptly.
+        const int wait_ms = draining_ ? 100 : 1000;
 #ifdef __linux__
-        int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, 1000);
+        int num_events = epoll_wait(epoll_fd_, events, MAX_EVENTS, wait_ms);
 #elif __APPLE__
-        struct timespec timeout{1, 0};
+        struct timespec timeout{wait_ms / 1000, (wait_ms % 1000) * 1000000};
         int num_events = kevent(kqueue_fd_, NULL, 0, events, MAX_EVENTS, &timeout);
 #endif
         if (num_events < 0) {
@@ -406,9 +419,39 @@ void Server::run() {
         }
 
         auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_cleanup).count() > 30) {
-            cleanup_expired_connections();
+
+        // Transition into graceful drain on the first observed stop request.
+        if (!draining_ && stop_requested_.load(std::memory_order_relaxed)) {
+            draining_ = true;
+            stop_accepting(); // No new connections from here on.
+            drain_deadline = now + std::chrono::seconds(settings_.shutdown_grace_sec);
+            ORE_LOG(INFO) << "Graceful shutdown initiated; draining "
+                          << connections_.size() << " connection(s)";
+        }
+
+        // Enforce timeouts on a fixed cadence (and every iteration while draining
+        // so stalled connections do not hold up shutdown).
+        if (draining_ ||
+            std::chrono::duration_cast<std::chrono::seconds>(now - last_cleanup).count() >= kCleanupIntervalSec) {
+            enforce_timeouts();
             last_cleanup = now;
+        }
+
+        if (draining_) {
+            bool work_in_flight = false;
+            for (const auto& pair : connections_) {
+                if (pair.second->processing_ || pair.second->has_data_to_write()) {
+                    work_in_flight = true;
+                    break;
+                }
+            }
+            if (!work_in_flight) {
+                running_.store(false, std::memory_order_relaxed); // Clean drain.
+            } else if (now >= drain_deadline) {
+                ORE_LOG(WARN) << "Shutdown grace expired; dropping "
+                              << connections_.size() << " connection(s) with work in flight";
+                running_.store(false, std::memory_order_relaxed);
+            }
         }
     }
 
@@ -608,7 +651,9 @@ void Server::handle_write_ready(int fd) {
     }
 
     // Full response sent.
-    if (!conn->keep_alive_) {
+    if (!conn->keep_alive_ || draining_) {
+        // During a graceful drain we do not reuse connections: close once the
+        // in-flight response has been fully flushed.
         close_connection(fd);
         return;
     }
@@ -638,17 +683,63 @@ void Server::close_connection(int fd) {
     conn->close_connection();
 }
 
-void Server::cleanup_expired_connections() {
-    auto now = std::chrono::steady_clock::now();
-    std::vector<int> fds_to_close;
+void Server::stop_accepting() {
+    if (listen_fd_ < 0) return;
+#ifdef __linux__
+    if (epoll_fd_ >= 0) {
+        epoll_event ev{};
+        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, listen_fd_, &ev);
+    }
+#endif
+    // Closing the fd also removes it from kqueue on BSD/macOS.
+    close(listen_fd_);
+    listen_fd_ = -1;
+}
+
+void Server::send_request_timeout(int fd) {
+    auto it = connections_.find(fd);
+    if (it == connections_.end() || !it->second->is_open()) return;
+    static const char k408[] =
+        "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    ::send(it->second->socket_fd_, k408, sizeof(k408) - 1, MSG_NOSIGNAL); // best-effort
+}
+
+void Server::enforce_timeouts() {
+    const auto now = std::chrono::steady_clock::now();
+    // Collect first, mutate after: close_connection() erases from connections_.
+    std::vector<int> idle_or_write_timeouts;
+    std::vector<int> read_timeouts;
+
     for (const auto& pair : connections_) {
-        if (pair.second->processing_) continue; // Don't reap work in flight.
-        if (std::chrono::duration_cast<std::chrono::seconds>(
-                now - pair.second->get_last_activity()).count() > 60) {
-            fds_to_close.push_back(pair.first);
+        const auto& conn = pair.second;
+        if (conn->processing_) continue; // A worker owns this; don't reap it.
+
+        const long idle_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                                  now - conn->get_last_activity()).count();
+
+        if (conn->has_data_to_write()) {
+            // Response in progress but the peer is not draining it.
+            if (settings_.write_timeout_sec > 0 && idle_sec > settings_.write_timeout_sec) {
+                idle_or_write_timeouts.push_back(pair.first);
+            }
+        } else if (conn->read_buffer_fill_ > 0) {
+            // A request is partially buffered but not yet complete.
+            if (settings_.read_timeout_sec > 0 && idle_sec > settings_.read_timeout_sec) {
+                read_timeouts.push_back(pair.first);
+            }
+        } else {
+            // Idle keep-alive connection awaiting the next request.
+            if (settings_.idle_timeout_sec > 0 && idle_sec > settings_.idle_timeout_sec) {
+                idle_or_write_timeouts.push_back(pair.first);
+            }
         }
     }
-    for (int fd : fds_to_close) {
+
+    for (int fd : read_timeouts) {
+        send_request_timeout(fd);
+        close_connection(fd);
+    }
+    for (int fd : idle_or_write_timeouts) {
         close_connection(fd);
     }
 }

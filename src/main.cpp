@@ -184,6 +184,11 @@ int main(int argc, char** argv) {
 
         // Create server instance
         Oreshnek::Server::Server server(g_server_config.thread_pool_size); //
+        server.configure(Oreshnek::Server::Server::Settings{
+            g_server_config.read_timeout_sec,
+            g_server_config.write_timeout_sec,
+            g_server_config.idle_timeout_sec,
+            g_server_config.shutdown_grace_sec});
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers
