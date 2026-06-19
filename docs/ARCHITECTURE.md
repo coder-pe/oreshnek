@@ -28,7 +28,8 @@ Oreshnek es un framework HTTP en C++20 con patrón **reactor**:
 | `Middleware` | Filtros encadenables ejecutados antes del handler (`Server::use`). |
 | `ThreadPool` | Workers que consumen tareas de una cola. |
 | `Platform::Config` | Carga `ServerConfig` desde fichero JSON + overrides por entorno. |
-| `Platform::SqlitePool` | Pool de conexiones SQLite en WAL con `busy_timeout`. |
+| `DatabaseManager` | Frontera sobre los backends (`std::variant` + `std::visit`, sin `virtual`). |
+| `SqliteBackend` / `PgBackend` | Concretos CRTP: SQLite3 (`SqlitePool`/WAL) y PostgreSQL (`PgPool`/libpq). |
 | `Utils::Logger` | Logging estructurado thread-safe con sink a fichero y rotación (`ORE_LOG(LEVEL) << ...`). |
 
 ### Respuestas de fichero
@@ -150,13 +151,24 @@ entorno (para secretos: `ORESHNEK_JWT_SECRET`, `ORESHNEK_PORT`, etc.). Un ficher
 ausente usa defaults; uno malformado lanza excepción. Ver
 [`config/oreshnek.example.json`](../config/oreshnek.example.json).
 
-## Persistencia (SQLite)
+## Persistencia (abstracción de backend)
 
-`Platform::SqlitePool` mantiene N conexiones a un mismo fichero, cada una en modo
-**WAL** (lectores concurrentes + un escritor), con `synchronous=NORMAL`,
-`foreign_keys=ON` y `busy_timeout`. `DatabaseManager` toma una conexión del pool
-(RAII) por operación, en lugar de serializar todo en un mutex global, lo que
-permite consultas en paralelo desde los workers.
+`DatabaseManager` es una **frontera** sobre los backends concretos, con
+**polimorfismo estático** (sin `virtual`): un `concept DatabaseBackend` + base
+**CRTP** `DatabaseBase<Derived>` definen el contrato, y la selección en runtime se
+hace con `std::variant` + `std::visit`. Hay dos concretos:
+
+- **`SqliteBackend`** — `Platform::SqlitePool`: N conexiones al mismo fichero en
+  modo **WAL** (lectores concurrentes + un escritor), `synchronous=NORMAL`,
+  `foreign_keys=ON`, `busy_timeout`.
+- **`PgBackend`** (principal) — `Platform::PgPool`: pool de conexiones **libpq**
+  con RAII + reconexión (`PQreset`); consultas siempre parametrizadas (`$n`,
+  anti-inyección).
+
+El backend se elige por configuración (`db.backend`). Cada operación toma una
+conexión del pool (RAII), en lugar de serializar en un mutex global, permitiendo
+consultas en paralelo desde los workers. Diseño y extensibilidad (Oracle, MySQL,
+MongoDB, ...) en [DATABASE.md](DATABASE.md).
 
 ## Logging
 

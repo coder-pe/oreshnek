@@ -37,7 +37,12 @@ int main() {
     remove_db(db_path);
 
     {
-        DatabaseManager db(db_path, /*pool_size=*/4, /*busy_timeout_ms=*/5000);
+        ServerConfig cfg;
+        cfg.db.backend = "sqlite";
+        cfg.db.sqlite_path = db_path;
+        cfg.db.sqlite_pool_size = 4;
+        cfg.db.sqlite_busy_timeout_ms = 5000;
+        DatabaseManager db(cfg);
 
         // --- User roundtrip + unique constraint ---------------------------------
         User u;
