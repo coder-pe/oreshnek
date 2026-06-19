@@ -84,6 +84,7 @@ add_library(oreshnek STATIC ${ORESHNEK_LIB_SOURCES})
 target_include_directories(oreshnek PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(oreshnek PUBLIC
     Threads::Threads
+    OpenSSL::SSL
     OpenSSL::Crypto
     SQLite::SQLite3
     PostgreSQL::PostgreSQL
