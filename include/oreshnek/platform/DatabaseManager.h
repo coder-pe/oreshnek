@@ -1,14 +1,13 @@
 #ifndef ORESHNEK_PLATFORM_DATABASE_MANAGER_H
 #define ORESHNEK_PLATFORM_DATABASE_MANAGER_H
 
+#include "oreshnek/platform/SqlitePool.h"
+
 #include <string>
 #include <vector>
-#include <mutex>
 #include <sqlite3.h>
-#include <vector> // Required for std::vector
 #include <string_view> // Required for std::string_view
 #include <thread>
-#include <iostream>
 
 // Forward declarations to avoid circular includes for models if they were in separate files
 // For now, assuming they are defined directly in this header or a common models header
@@ -96,11 +95,11 @@ struct Comment {
 
 class DatabaseManager {
 private:
-    sqlite3* db_;
-    std::mutex db_mutex_;
+    // A pool of WAL connections; each operation checks one out for its duration.
+    SqlitePool pool_;
 
 public:
-    DatabaseManager(const std::string& db_path);
+    DatabaseManager(const std::string& db_path, int pool_size = 4, int busy_timeout_ms = 5000);
     ~DatabaseManager();
 
     void initializeTables(); // [cite: 83]
