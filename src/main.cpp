@@ -1,6 +1,7 @@
 // src/main.cpp
 #include "oreshnek/Oreshnek.h" // Include the convenience header
 #include "oreshnek/http/Multipart.h" // Multipart/form-data parser
+#include "oreshnek/server/Middleware.h"        // Built-in middlewares
 #include "oreshnek/platform/Config.h"          // External configuration loader
 #include "oreshnek/platform/DatabaseManager.h" // Include your DatabaseManager
 #include "oreshnek/platform/SecurityUtils.h"   // Include your SecurityUtils
@@ -196,6 +197,15 @@ int main(int argc, char** argv) {
         // Setup signal handlers
         signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
+
+        // --- Cross-cutting middleware (run before handlers, in this order) ---
+        namespace MW = Oreshnek::Server::Middlewares;
+        server.use(MW::request_logger());
+        if (g_server_config.cors_enabled) {
+            server.use(MW::cors(g_server_config.cors_allow_origin));
+        }
+        // Reject uploads without a valid bearer token before reaching the handler.
+        server.use(MW::require_jwt(g_server_config.jwt_secret, {"/api/upload"}));
 
         // --- Define API routes for the Video Streaming Platform ---
 

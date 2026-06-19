@@ -558,14 +558,35 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;
 
+            // Run the middleware chain first. Any middleware may short-circuit
+            // (return false) with a response already populated (auth rejection,
+            // CORS preflight, ...), in which case the handler is skipped.
+            bool proceed = true;
+            for (const auto& mw : middlewares_) {
+                try {
+                    if (!mw(*request, res)) { proceed = false; break; }
+                } catch (const std::exception& e) {
+                    ORE_LOG(ERROR) << "Middleware exception: " << e.what();
+                    nlohmann::json err;
+                    err["error"] = "Server error";
+                    res.status(Http::HttpStatus::INTERNAL_SERVER_ERROR).json(err);
+                    proceed = false;
+                    break;
+                }
+            }
+
             // HEAD reuses the GET handler; the body is stripped later.
             Http::HttpMethod method = request->method();
-            bool found = router_->find_route(method, request->path(), path_params, handler);
-            if (!found && method == Http::HttpMethod::HEAD) {
+            bool found = proceed &&
+                         router_->find_route(method, request->path(), path_params, handler);
+            if (proceed && !found && method == Http::HttpMethod::HEAD) {
                 found = router_->find_route(Http::HttpMethod::GET, request->path(), path_params, handler);
             }
 
-            if (found) {
+            if (!proceed) {
+                // A middleware already produced the response; fall through to the
+                // semantics/completion handling below.
+            } else if (found) {
                 request->path_params_ = std::move(path_params);
                 try {
                     handler(*request, res);
