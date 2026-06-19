@@ -8,13 +8,13 @@ namespace Platform {
 DatabaseManager::Backend DatabaseManager::make_backend(const ServerConfig& config) {
     const DatabaseConfig& db = config.db;
     if (db.backend == "postgres") {
-        // The PostgreSQL backend is not yet compiled into this build; fall back
-        // to SQLite so the server still starts.
-        ORE_LOG(WARN) << "db.backend='postgres' requested but not available in "
-                         "this binary; using SQLite instead.";
-    } else if (db.backend != "sqlite") {
+        ORE_LOG(INFO) << "Using PostgreSQL backend";
+        return std::make_unique<PgBackend>(db);
+    }
+    if (db.backend != "sqlite") {
         ORE_LOG(WARN) << "Unknown db.backend='" << db.backend << "'; using SQLite.";
     }
+    ORE_LOG(INFO) << "Using SQLite backend (" << db.sqlite_path << ")";
     return std::make_unique<SqliteBackend>(db.sqlite_path, db.sqlite_pool_size,
                                            db.sqlite_busy_timeout_ms);
 }

@@ -46,6 +46,21 @@ if(SQLITE3_FOUND)
     message(STATUS "Found SQLite3: ${SQLite3_VERSION}")
 endif()
 
+# PostgreSQL client (libpq). On macOS, Homebrew's libpq is keg-only, so hint its
+# location; on Linux it lives in the default search paths.
+if(APPLE AND NOT PostgreSQL_ROOT)
+    execute_process(COMMAND brew --prefix libpq
+                    OUTPUT_VARIABLE ORESHNEK_BREW_LIBPQ
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(ORESHNEK_BREW_LIBPQ)
+        set(PostgreSQL_ROOT "${ORESHNEK_BREW_LIBPQ}")
+    endif()
+endif()
+find_package(PostgreSQL REQUIRED)
+if(PostgreSQL_FOUND)
+    message(STATUS "Found PostgreSQL (libpq): ${PostgreSQL_VERSION_STRING}")
+endif()
+
 # nlohmann/json: prefer the vendored single-header (in nlohmann_json/, which is
 # git-ignored), fall back to a system/CMake package. Marked SYSTEM so the
 # header's own code does not trip our -Wall -Wextra -pedantic flags.
@@ -71,6 +86,7 @@ target_link_libraries(oreshnek PUBLIC
     Threads::Threads
     OpenSSL::Crypto
     SQLite::SQLite3
+    PostgreSQL::PostgreSQL
     oreshnek_json
     oreshnek_sanitizers
 )
@@ -124,4 +140,11 @@ if(ORESHNEK_BUILD_TESTS)
     target_compile_options(middleware_test PRIVATE -Wall -Wextra)
     add_test(NAME middleware_test COMMAND middleware_test)
     set_tests_properties(middleware_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
+    # PostgreSQL backend test: skips at runtime unless ORESHNEK_PG_TEST_DSN is set.
+    add_executable(pg_test tests/pg_test.cpp)
+    target_link_libraries(pg_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(pg_test PRIVATE -Wall -Wextra)
+    add_test(NAME pg_test COMMAND pg_test)
+    set_tests_properties(pg_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 endif()

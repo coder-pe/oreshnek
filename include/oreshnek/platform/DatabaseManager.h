@@ -4,6 +4,7 @@
 
 #include "oreshnek/platform/Config.h"        // ServerConfig
 #include "oreshnek/platform/Models.h"
+#include "oreshnek/platform/PgBackend.h"
 #include "oreshnek/platform/SqliteBackend.h"
 
 #include <memory>
@@ -31,8 +32,10 @@ public:
 private:
     // The pools own a mutex/condvar (non-movable), so the alternatives live
     // behind unique_ptr: this keeps the variant movable and lets us pick the
-    // backend at runtime in make_backend().
-    using Backend = std::variant<std::unique_ptr<SqliteBackend>>;
+    // backend at runtime in make_backend(). Add a backend by extending this
+    // variant and make_backend(); std::visit call sites stay untouched.
+    using Backend = std::variant<std::unique_ptr<SqliteBackend>,
+                                 std::unique_ptr<PgBackend>>;
 
     static Backend make_backend(const ServerConfig& config);
 
