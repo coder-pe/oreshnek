@@ -42,9 +42,12 @@ struct TlsConfig {
     std::string min_version = "1.2";  // "1.2" | "1.3"
 };
 
-// Per-IP token-bucket rate limiting.
+// Per-IP token-bucket rate limiting. Enabled by default (secure-by-default): a
+// single IP is capped at `requests_per_second` (with a `burst` allowance), so a
+// flood of refreshes/requests cannot saturate the server. Set enabled=false to
+// turn it off.
 struct RateLimitConfig {
-    bool enabled = false;
+    bool enabled = true;
     double requests_per_second = 50.0; // sustained refill rate
     double burst = 100.0;              // bucket capacity (peak allowance)
 };

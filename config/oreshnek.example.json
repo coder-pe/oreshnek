@@ -52,8 +52,8 @@
   },
 
   "rate_limit": {
-    "_comment": "Per-IP token bucket: sustained requests_per_second with a peak of burst.",
-    "enabled": false,
+    "_comment": "Per-IP token bucket (on by default). sustained requests_per_second with a peak of burst; set enabled=false to disable.",
+    "enabled": true,
     "requests_per_second": 50,
     "burst": 100
   },

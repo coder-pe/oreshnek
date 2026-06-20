@@ -234,7 +234,6 @@ int main(int argc, char** argv) {
         server.get("/static/:file_path", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
             std::optional<std::string_view> file_path_opt = req.param("file_path");
             if (!file_path_opt) {
-                std::cerr << "DEBUG: Missing file path for static request.\n";
                 res.status(Oreshnek::Http::HttpStatus::BAD_REQUEST).text("Missing file path");
                 return;
             }
@@ -248,13 +247,11 @@ int main(int argc, char** argv) {
             std::string file_path = *resolved;
 
             if (!std::filesystem::exists(file_path)) {
-                std::cerr << "DEBUG: Static file not found: " << file_path << "\n";
                 res.status(Oreshnek::Http::HttpStatus::NOT_FOUND).text("File not found");
                 return;
             }
             if (std::filesystem::is_directory(file_path)) {
-                std::cerr << "DEBUG: Static file is a directory: " << file_path << "\n";
-                res.status(Oreshnek::Http::HttpStatus::FORBIDDEN).text("Cannot serve directory"); // Or NOT_FOUND
+                res.status(Oreshnek::Http::HttpStatus::FORBIDDEN).text("Cannot serve directory");
                 return;
             }
 
@@ -465,15 +462,6 @@ int main(int argc, char** argv) {
                 return;
             }
 
-            // --- DEBUG PRINT: Print raw request body for upload ---
-            std::cerr << "DEBUG: /api/upload raw body size: " << req.body().length() << " bytes.\n";
-            if (req.body().length() > 0) {
-                std::cerr << "DEBUG: /api/upload raw body (first 512 bytes): " << req.body().substr(0, std::min(req.body().length(), (size_t)512)) << "...\n";
-            } else {
-                std::cerr << "DEBUG: /api/upload raw body is empty.\n";
-            }
-            // --- END DEBUG PRINT ---
-
             std::unordered_map<std::string, std::string> form_data = parse_multipart_form_data(req.body(), *content_type_header_opt);
 
             // Access fields
@@ -557,10 +545,6 @@ int main(int argc, char** argv) {
                 response_json["videos"].push_back(video_json);
             }
             
-            // --- DEBUG PRINT: Print the generated JSON to stderr for inspection ---
-            std::cerr << "DEBUG: Sending /api/videos response: " << response_json.dump() << std::endl;
-            // --- END DEBUG PRINT ---
-
             res.json(response_json); //
         });
 
