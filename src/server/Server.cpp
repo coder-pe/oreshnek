@@ -138,6 +138,15 @@ void Server::enable_rate_limit(double requests_per_second, double burst) {
                   << " req/s per IP (burst " << burst << ")";
 }
 
+void Server::enable_metrics(const std::string& path) {
+    router_->add_route(Http::HttpMethod::GET, path,
+                       [this](const Http::HttpRequest&, Http::HttpResponse& res) {
+                           res.status(Http::HttpStatus::OK).body(metrics_.render());
+                           res.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+                       });
+    ORE_LOG(INFO) << "Metrics exposed at GET " << path;
+}
+
 void Server::set_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
@@ -560,6 +569,8 @@ void Server::handle_new_connection() {
             conn->set_ssl(ssl); // Handshake is driven lazily on the first event.
         }
         connections_[client_fd] = std::move(conn);
+        metrics_.connections_accepted.fetch_add(1, std::memory_order_relaxed);
+        metrics_.connections_active.fetch_add(1, std::memory_order_relaxed);
     }
 
     if (client_fd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -572,11 +583,15 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
 
     size_t consumed = 0;
     if (conn->parse_next(consumed)) {
+        metrics_.requests_total.fetch_add(1, std::memory_order_relaxed);
+
         // Rate limit per client IP before doing the owning copy or spawning a
         // worker: a throttled request is answered with 429 directly here.
         if (rate_limiter_ && !rate_limiter_->allow(conn->client_ip_)) {
             conn->consume(consumed);
             conn->processing_ = true;
+            metrics_.rate_limited_total.fetch_add(1, std::memory_order_relaxed);
+            metrics_.record_status(429);
             Http::HttpResponse res;
             nlohmann::json err;
             err["error"] = "Too Many Requests";
@@ -593,8 +608,9 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
         request->make_owned(conn->read_buffer_.data(), consumed);
         conn->consume(consumed);
         conn->processing_ = true;
+        const auto t_start = std::chrono::steady_clock::now();
 
-        thread_pool_->enqueue([this, fd, conn, request]() {
+        thread_pool_->enqueue([this, fd, conn, request, t_start]() {
             Http::HttpResponse res;
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;
@@ -646,6 +662,11 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
             // Apply request-driven response semantics (Range for file responses,
             // HEAD body suppression) before handing the response back.
             apply_http_semantics(*request, res);
+
+            // Record metrics for this request (atomic; safe off the loop thread).
+            metrics_.record_status(static_cast<int>(res.get_status()));
+            metrics_.observe_duration(
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count());
 
             {
                 std::lock_guard<std::mutex> lock(completed_mutex_);
@@ -767,6 +788,7 @@ void Server::close_connection(int fd) {
 
     std::shared_ptr<Net::Connection> conn = std::move(it->second);
     connections_.erase(it);
+    metrics_.connections_active.fetch_sub(1, std::memory_order_relaxed);
     // Close the socket now. If a worker still holds a shared_ptr, the object
     // stays alive but its fd is already closed (is_open() == false), so the
     // pending response will be dropped safely in process_completions().

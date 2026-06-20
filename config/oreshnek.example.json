@@ -57,6 +57,12 @@
     "burst": 100
   },
 
+  "metrics": {
+    "_comment": "Prometheus text-format metrics exposed at the given GET path.",
+    "enabled": false,
+    "path": "/metrics"
+  },
+
   "cors_enabled": false,
   "cors_allow_origin": "*"
 }

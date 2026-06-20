@@ -102,6 +102,11 @@ ServerConfig Config::load(const std::string& path) {
                 assign_if_present(*rl, "burst", cfg.rate_limit.burst);
             }
 
+            if (auto m = config.find("metrics"); m != config.end() && m->is_object()) {
+                assign_if_present(*m, "enabled", cfg.metrics.enabled);
+                assign_if_present(*m, "path", cfg.metrics.path);
+            }
+
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);
             assign_if_present(config, "cors_allow_origin", cfg.cors_allow_origin);
 

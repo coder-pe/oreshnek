@@ -207,6 +207,11 @@ int main(int argc, char** argv) {
             server.enable_rate_limit(g_server_config.rate_limit.requests_per_second,
                                      g_server_config.rate_limit.burst);
         }
+
+        // Expose Prometheus metrics if configured.
+        if (g_server_config.metrics.enabled) {
+            server.enable_metrics(g_server_config.metrics.path);
+        }
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers

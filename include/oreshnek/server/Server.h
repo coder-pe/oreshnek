@@ -5,6 +5,7 @@
 #include "oreshnek/server/Router.h"
 #include "oreshnek/server/ThreadPool.h"
 #include "oreshnek/server/RateLimiter.h"
+#include "oreshnek/server/Metrics.h"
 #include "oreshnek/net/Connection.h"
 #include "oreshnek/http/HttpRequest.h"
 #include "oreshnek/http/HttpResponse.h"
@@ -59,6 +60,8 @@ private:
     std::unique_ptr<Net::TlsContext> tls_ctx_;
     // Non-null when rate limiting is enabled. Touched only by the event loop.
     std::unique_ptr<TokenBucketLimiter> rate_limiter_;
+    // Server metrics (atomic; updated by the event loop and workers).
+    Metrics metrics_;
 
     // Middleware chain, run before the handler in registration order. Populated
     // before run() and only read (never mutated) by worker threads afterwards.
@@ -114,6 +117,12 @@ public:
 
     // Enable per-IP token-bucket rate limiting. Call before listen()/run().
     void enable_rate_limit(double requests_per_second, double burst);
+
+    // Register a GET route that exposes server metrics in Prometheus text format.
+    void enable_metrics(const std::string& path);
+
+    // Access the live metrics (e.g. for tests).
+    const Metrics& metrics() const { return metrics_; }
 
     // Register a middleware. Middlewares run before the matched handler in
     // registration order. Call before listen()/run(); not thread-safe to call

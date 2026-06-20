@@ -49,6 +49,12 @@ struct RateLimitConfig {
     double burst = 100.0;              // bucket capacity (peak allowance)
 };
 
+// Prometheus metrics endpoint.
+struct MetricsConfig {
+    bool enabled = false;
+    std::string path = "/metrics";
+};
+
 // Runtime configuration, loadable from an external JSON file (see Config::load).
 struct ServerConfig {
     int port = 8080;
@@ -81,6 +87,9 @@ struct ServerConfig {
 
     // Rate limiting (per client IP, enforced in the event loop).
     RateLimitConfig rate_limit;
+
+    // Prometheus metrics endpoint.
+    MetricsConfig metrics;
 
     // CORS (applied by the built-in CORS middleware when enabled).
     bool cors_enabled = false;
