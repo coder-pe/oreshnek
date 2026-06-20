@@ -135,6 +135,17 @@ tienen un worker en vuelo y aplica, según su estado:
 Los tres son configurables (`Server::Settings`, poblados desde `ServerConfig`); un
 valor de `0` desactiva el timeout correspondiente.
 
+## Rate limiting
+
+Con `rate_limit.enabled`, un **token bucket por IP** (`TokenBucketLimiter`) se
+consulta en `dispatch_next` —en el hilo del event loop, antes de copiar la
+petición o lanzar un worker—; si la IP excede su cuota se responde `429 Too Many
+Requests` (con `Retry-After`) directamente, sin gastar un worker. El bucket
+refilla a `requests_per_second` hasta una capacidad `burst`. Al vivir solo en el
+event loop no necesita locks; los buckets ociosos se descartan en el barrido
+periódico para acotar memoria. La IP se captura en el `accept`
+(`Connection::client_ip_`).
+
 ## Middleware
 
 `Server::use(Middleware)` registra filtros `bool(const HttpRequest&, HttpResponse&)`

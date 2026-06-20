@@ -77,8 +77,14 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
   compresión TLS, preferencia de cifrados del servidor.
 - Handshake no bloqueante en el event loop. Ver [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Rate limiting (anti-abuso/DoS)
+
+- Token bucket por IP, configurable (`rate_limit.enabled`, `requests_per_second`,
+  `burst`). Se aplica en el event loop antes de gastar un worker; el exceso recibe
+  `429 Too Many Requests` con `Retry-After`. Ver [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Pendiente (fases posteriores)
 
-- Rate limiting y métricas (Fase 6, en curso).
+- Métricas `/metrics` (Fase 6, en curso).
 - Cabeceras de seguridad (HSTS, X-Frame-Options) además del CORS ya disponible.
 - Timeout de handler (`504`) con cancelación cooperativa de workers (Fase 6).
