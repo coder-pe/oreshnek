@@ -72,6 +72,7 @@ struct ServerConfig {
     int write_timeout_sec = 30;    // Stalled response write -> drop connection.
     int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
     int shutdown_grace_sec = 10;   // Drain budget for graceful shutdown.
+    int handler_timeout_sec = 30;  // Handler exceeds this -> 504 and close.
 
     // Logging.
     std::string log_level = "info";       // trace|debug|info|warn|error|off

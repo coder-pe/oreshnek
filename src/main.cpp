@@ -190,7 +190,8 @@ int main(int argc, char** argv) {
             g_server_config.read_timeout_sec,
             g_server_config.write_timeout_sec,
             g_server_config.idle_timeout_sec,
-            g_server_config.shutdown_grace_sec});
+            g_server_config.shutdown_grace_sec,
+            g_server_config.handler_timeout_sec});
 
         // Enable HTTPS if configured (throws on an invalid certificate/key).
         if (g_server_config.tls.enabled) {

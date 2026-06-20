@@ -16,6 +16,7 @@
   "write_timeout_sec": 30,
   "idle_timeout_sec": 60,
   "shutdown_grace_sec": 10,
+  "handler_timeout_sec": 30,
 
   "log_level": "info",
   "log_file": "",

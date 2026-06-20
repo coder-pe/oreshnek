@@ -70,6 +70,12 @@ public:
     // closing a connection that has work in flight. Touched only by the event loop.
     bool processing_ = false;
 
+    // True only while a worker is actively running the handler (cleared once the
+    // response comes back, before the write phase). Drives the handler-timeout
+    // (504) deadline; `processing_since_` is when the worker was dispatched.
+    bool worker_in_flight_ = false;
+    std::chrono::steady_clock::time_point processing_since_;
+
     Connection(int fd);
     ~Connection();
 

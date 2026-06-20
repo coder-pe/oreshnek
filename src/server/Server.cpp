@@ -342,6 +342,9 @@ void Server::process_completions() {
             continue; // Connection went away; drop the response.
         }
 
+        // The worker finished: leave the handler-timeout window, enter the write
+        // phase (now governed by write_timeout).
+        item.conn->worker_in_flight_ = false;
         item.conn->set_response_content(item.response);
         rearm(item.fd, /*read=*/false); // Closes the connection on failure.
     }
@@ -608,7 +611,9 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
         request->make_owned(conn->read_buffer_.data(), consumed);
         conn->consume(consumed);
         conn->processing_ = true;
+        conn->worker_in_flight_ = true;
         const auto t_start = std::chrono::steady_clock::now();
+        conn->processing_since_ = t_start;
 
         thread_pool_->enqueue([this, fd, conn, request, t_start]() {
             Http::HttpResponse res;
@@ -808,40 +813,64 @@ void Server::stop_accepting() {
     listen_fd_ = -1;
 }
 
-void Server::send_request_timeout(int fd) {
+void Server::send_minimal_response(int fd, const char* bytes, size_t len) {
     auto it = connections_.find(fd);
     if (it == connections_.end() || !it->second->is_open()) return;
     const auto& conn = it->second;
-    static const char k408[] =
-        "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
     if (conn->uses_tls()) {
         // Only meaningful once the TLS session exists; otherwise just close.
         if (conn->tls_handshake_done()) {
-            SSL_write(conn->ssl_, k408, sizeof(k408) - 1); // best-effort over TLS
+            SSL_write(conn->ssl_, bytes, static_cast<int>(len)); // best-effort over TLS
         }
     } else {
-        ::send(conn->socket_fd_, k408, sizeof(k408) - 1, MSG_NOSIGNAL); // best-effort
+        ::send(conn->socket_fd_, bytes, len, MSG_NOSIGNAL); // best-effort
     }
+}
+
+void Server::send_request_timeout(int fd) {
+    static const char k408[] =
+        "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    send_minimal_response(fd, k408, sizeof(k408) - 1);
+}
+
+void Server::send_handler_timeout(int fd) {
+    static const char k504[] =
+        "HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    send_minimal_response(fd, k504, sizeof(k504) - 1);
 }
 
 void Server::enforce_timeouts() {
     const auto now = std::chrono::steady_clock::now();
     // Collect first, mutate after: close_connection() erases from connections_.
-    std::vector<int> idle_or_write_timeouts;
-    std::vector<int> read_timeouts;
+    std::vector<int> read_timeouts;     // -> 408
+    std::vector<int> handler_timeouts;  // -> 504
+    std::vector<int> plain_closes;      // idle / stalled write
 
     for (const auto& pair : connections_) {
         const auto& conn = pair.second;
-        if (conn->processing_) continue; // A worker owns this; don't reap it.
+
+        if (conn->worker_in_flight_) {
+            // A worker is running the handler. It cannot be cancelled safely, so
+            // on deadline we drop the connection (504); its late result is
+            // discarded by process_completions' liveness guard.
+            if (settings_.handler_timeout_sec > 0) {
+                const long busy = std::chrono::duration_cast<std::chrono::seconds>(
+                                      now - conn->processing_since_).count();
+                if (busy > settings_.handler_timeout_sec) handler_timeouts.push_back(pair.first);
+            }
+            continue;
+        }
 
         const long idle_sec = std::chrono::duration_cast<std::chrono::seconds>(
                                   now - conn->get_last_activity()).count();
 
         if (conn->has_data_to_write()) {
-            // Response in progress but the peer is not draining it.
+            // Response being written but the peer is not draining it.
             if (settings_.write_timeout_sec > 0 && idle_sec > settings_.write_timeout_sec) {
-                idle_or_write_timeouts.push_back(pair.first);
+                plain_closes.push_back(pair.first);
             }
+        } else if (conn->processing_) {
+            continue; // Transient state with no data queued yet; leave it alone.
         } else if (conn->read_buffer_fill_ > 0) {
             // A request is partially buffered but not yet complete.
             if (settings_.read_timeout_sec > 0 && idle_sec > settings_.read_timeout_sec) {
@@ -850,7 +879,7 @@ void Server::enforce_timeouts() {
         } else {
             // Idle keep-alive connection awaiting the next request.
             if (settings_.idle_timeout_sec > 0 && idle_sec > settings_.idle_timeout_sec) {
-                idle_or_write_timeouts.push_back(pair.first);
+                plain_closes.push_back(pair.first);
             }
         }
     }
@@ -859,7 +888,13 @@ void Server::enforce_timeouts() {
         send_request_timeout(fd);
         close_connection(fd);
     }
-    for (int fd : idle_or_write_timeouts) {
+    for (int fd : handler_timeouts) {
+        metrics_.handler_timeouts_total.fetch_add(1, std::memory_order_relaxed);
+        metrics_.record_status(504);
+        send_handler_timeout(fd);
+        close_connection(fd);
+    }
+    for (int fd : plain_closes) {
         close_connection(fd);
     }
 

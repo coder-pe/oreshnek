@@ -101,6 +101,7 @@ public:
         int write_timeout_sec = 30;    // Stalled response write -> drop.
         int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
         int shutdown_grace_sec = 10;   // Drain budget for graceful shutdown.
+        int handler_timeout_sec = 30;  // Worker/handler deadline -> 504.
     };
 
     Server(size_t worker_threads = std::thread::hardware_concurrency());
@@ -199,9 +200,12 @@ private:
     // connection still buffering a request past read_timeout gets a 408 first.
     void enforce_timeouts();
 
-    // Best-effort "408 Request Timeout" written synchronously before closing a
-    // connection that took too long to send its request.
+    // Best-effort write of a minimal status-only response (TLS-aware) before
+    // closing a timed-out connection.
+    void send_minimal_response(int fd, const char* bytes, size_t len);
+    // 408: request took too long to arrive. 504: handler exceeded its deadline.
     void send_request_timeout(int fd);
+    void send_handler_timeout(int fd);
 
     Settings settings_;
 };
