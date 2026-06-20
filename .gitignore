@@ -1,7 +1,10 @@
 build/
 build-*/
 nlohmann_json/
+drogon/
 expert_review_v1.md
 claude_expert_review_v1.md
 *.db
+*.db-wal
+*.db-shm
 
