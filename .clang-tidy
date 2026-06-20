@@ -1,0 +1,23 @@
+# Static-analysis profile for Oreshnek, focused on the axes that matter for a
+# high-performance, resource-careful, secure server: bugs, concurrency, security
+# (CERT), performance and resource handling. Run via tools/analyze.sh.
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  concurrency-*,
+  cert-*,
+  performance-*,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  misc-unused-using-decls,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-special-member-functions,
+  cppcoreguidelines-narrowing-conversions,
+  -bugprone-easily-swappable-parameters,
+  -cert-err58-cpp,
+  -performance-avoid-endl,
+  -clang-analyzer-optin.core.EnumCastOutOfRange
+
+WarningsAsErrors: ''
+HeaderFilterRegex: 'include/oreshnek/.*'
+FormatStyle: none
