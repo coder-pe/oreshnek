@@ -2,13 +2,19 @@
 
 Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado para construir aplicaciones y APIs web rápidas y escalables. Utiliza un modelo asíncrono y basado en eventos con `epoll` en Linux y `kqueue` en macOS para una gestión eficiente de las conexiones.
 
-> **Estado:** en endurecimiento hacia producción. Completadas las fases de
+> **Estado:** endurecido hacia producción (Fases 0–6). Completadas:
 > estabilidad/concurrencia (sin data races ni use-after-free, verificado con
-> sanitizers), seguridad (JWT/PBKDF2, anti directory-traversal, límites) y
-> HTTP/1.1 + streaming. El plan y su progreso están en
-> [`docs/ROADMAP.md`](docs/ROADMAP.md); el modelo de ejecución en
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) y la seguridad en
-> [`docs/SECURITY.md`](docs/SECURITY.md).
+> sanitizers), seguridad (JWT/PBKDF2, anti directory-traversal, límites),
+> HTTP/1.1 + streaming, robustez productiva (config externa, logging, timeouts,
+> shutdown graceful, middleware), abstracción de BD + **PostgreSQL**, y
+> **TLS + rate limiting + métricas Prometheus**. El plan y su progreso están en
+> [`docs/ROADMAP.md`](docs/ROADMAP.md).
+>
+> **Recursos:** [ejemplos de referencia](examples/README.md) ·
+> [análisis y apps optimizadas](docs/ANALYSIS.md) ·
+> [arquitectura](docs/ARCHITECTURE.md) · [seguridad](docs/SECURITY.md) ·
+> [persistencia/BD](docs/DATABASE.md) ·
+> [comparativa con Drogon](docs/COMPARISON_DROGON.md).
 
 ## Características Principales
 
@@ -20,7 +26,12 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 *   **Streaming de ficheros:** Servido zero-copy con `sendfile` y **Range requests** (`206 Partial Content`) para vídeo y descargas reanudables.
 *   **Procesamiento de JSON:** Usa [nlohmann/json](https://github.com/nlohmann/json) como motor JSON.
 *   **Subidas multipart:** Parser `multipart/form-data` integrado (`Http::Multipart`).
-*   **Extensible:** Diseñado con una arquitectura modular que facilita la adición de nueva funcionalidad.
+*   **TLS/HTTPS:** Opcional sobre OpenSSL con handshake no bloqueante.
+*   **Middleware:** Cadena encadenable con short-circuit (CORS, logging, JWT, propios).
+*   **Bases de datos:** Abstracción sin `virtual` (CRTP) con backends **SQLite** y **PostgreSQL** (libpq), seleccionables por configuración.
+*   **Operación:** Configuración externa (JSON + entorno), logging estructurado con rotación, timeouts, apagado graceful, **rate limiting** por IP y **métricas Prometheus** (`/metrics`).
+*   **Seguridad:** PBKDF2-HMAC-SHA256, JWT HS256 (tiempo constante), límites anti-DoS.
+*   **Extensible:** Arquitectura modular; ver [puntos de personalización](examples/README.md).
 
 ## Requisitos
 
@@ -56,6 +67,7 @@ El ejecutable `oreshnek_server` se encontrará en el directorio `build/`.
 | Opción CMake | Por defecto | Descripción |
 |--------------|-------------|-------------|
 | `ORESHNEK_BUILD_TESTS` | `ON` | Compila la suite de tests. |
+| `ORESHNEK_BUILD_EXAMPLES` | `ON` | Compila los ejemplos de `examples/`. |
 | `ORESHNEK_ASAN` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer. |
 | `ORESHNEK_TSAN` | `OFF` | ThreadSanitizer (mutuamente excluyente con ASan). |
 
@@ -76,10 +88,10 @@ int main() {
 
     // Definir una ruta para el método GET en "/"
     server.get("/", [](const Oreshnek::HttpRequest& req, Oreshnek::HttpResponse& res) {
-        // Crear un objeto JSON para la respuesta
-        Oreshnek::JsonValue response_json = Oreshnek::JsonValue::object();
+        // Crear un objeto JSON para la respuesta (nlohmann/json)
+        nlohmann::json response_json;
         response_json["message"] = "Hola, Mundo!";
-        
+
         // Enviar la respuesta JSON con un código de estado 200 OK
         res.status(Oreshnek::Http::HttpStatus::OK).json(response_json);
     });
@@ -133,7 +145,14 @@ cmake -B build-asan -DORESHNEK_ASAN=ON && cmake --build build-asan
 ASAN_OPTIONS=detect_leaks=0 ./build-asan/integration_test   # LSan no está soportado en macOS
 ```
 
-Estado actual: **TSan 0 races, ASan/UBSan 0 errores, `ctest` verde.**
+O todo de una vez con el gate de análisis (sanitizers + estático si está disponible):
+
+```bash
+tools/analyze.sh
+```
+
+Estado actual: **TSan 0 races, ASan/UBSan 0 errores, `ctest` verde (10 targets).**
+Ver [`docs/ANALYSIS.md`](docs/ANALYSIS.md) para construir apps optimizadas y seguras.
 
 ## Modelo de hilos
 
@@ -152,13 +171,17 @@ detalles (ciclo de vida de la petición y contrato de apagado) están en
 El framework está organizado en los siguientes módulos principales:
 
 *   `/include/oreshnek/`
-    *   `http/`: Clases para `HttpRequest`, `HttpResponse` y el parser de HTTP.
-    *   `json/`: Clases para `JsonValue`, `JsonParser` y `JsonBuilder`.
-    *   `net/`: Lógica de red de bajo nivel, incluyendo `Connection` y `SocketUtil`.
-    *   `server/`: El núcleo del servidor, incluyendo `Server`, `Router` y `ThreadPool`.
-    *   `platform/`: Abstracciones de plataforma como `DatabaseManager`.
-    *   `utils/`: Utilidades como `Logger` (sink de logging thread-safe) y `StringUtil`.
+    *   `http/`: `HttpRequest`, `HttpResponse`, el parser HTTP y `Multipart`.
+    *   `net/`: Red de bajo nivel: `Connection`, `SocketUtil` y `TlsContext`.
+    *   `server/`: Núcleo del servidor: `Server`, `Router`, `ThreadPool`,
+        `Middleware`, `RateLimiter` y `Metrics`.
+    *   `platform/`: `Config`, abstracción de BD (`DatabaseBackend`/`DatabaseManager`,
+        `SqliteBackend`/`PgBackend`, `SqlitePool`/`PgPool`) y `SecurityUtils`.
+    *   `utils/`: `Logger` (estructurado, thread-safe) y `StringUtil`/`TimeUtil`.
 *   `/src/`: Implementaciones de los ficheros de cabecera correspondientes.
-*   `/static/`: Ficheros estáticos para el ejemplo de la plataforma de video.
-*   `/tests/`: Pruebas de integración del framework.
-*   `/docs/`: Documentación de arquitectura ([`ARCHITECTURE.md`](docs/ARCHITECTURE.md)), seguridad ([`SECURITY.md`](docs/SECURITY.md)) y hoja de ruta ([`ROADMAP.md`](docs/ROADMAP.md)).
+*   `/examples/`: [Programas de referencia](examples/README.md) por caso de uso.
+*   `/tools/`: `analyze.sh` (gate de sanitizers + análisis estático).
+*   `/tests/`: Pruebas de integración del framework (10 targets ctest).
+*   `/docs/`: [Arquitectura](docs/ARCHITECTURE.md), [seguridad](docs/SECURITY.md),
+    [persistencia](docs/DATABASE.md), [análisis](docs/ANALYSIS.md),
+    [comparativa](docs/COMPARISON_DROGON.md) y [roadmap](docs/ROADMAP.md).
