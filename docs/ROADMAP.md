@@ -116,7 +116,7 @@ backend ligero (dev/tests/embebido). Diseño detallado en
 - ✅ Extensible a futuro (Oracle, MySQL, MongoDB, ClickHouse, DB2, ...) añadiendo
   concretos al `std::variant`.
 
-## Fase 6 — TLS y rendimiento 🔄
+## Fase 6 — TLS y rendimiento ✅ (queda opcional gzip/HTTP2)
 
 - ✅ **TLS con OpenSSL** (handshake no bloqueante integrado en el event loop):
   `Net::TlsContext` carga cert/key; `SSL_accept`/`SSL_read`/`SSL_write` con
@@ -128,6 +128,11 @@ backend ligero (dev/tests/embebido). Diseño detallado en
 - ✅ **Rate limiting** (token bucket por IP) en el event loop: rechaza con `429`
   antes de gastar un worker; `enabled`/`requests_per_second`/`burst` por config.
   Test `rate_limit_test` (unit + e2e, verde normal/ASan/TSan).
-- ⬜ Métricas Prometheus (`/metrics`).
-- ⬜ Timeout de handler (`504`) con cancelación cooperativa de workers.
+- ✅ **Métricas Prometheus** en `/metrics` (`Metrics`, contadores atómicos +
+  histograma de latencia); `metrics.enabled`/`metrics.path` por config. Test
+  `metrics_test`.
+- ✅ **Timeout de handler** (`504`): el event loop fija un deadline al worker en
+  vuelo (`handler_timeout_sec`); como el worker no se puede cancelar con
+  seguridad, su resultado tardío se descarta. De paso se corrigió el
+  write-timeout (antes inalcanzable). Test en `lifecycle_test`.
 - ⬜ (Opcional) compresión gzip/brotli, HTTP/2 (`nghttp2`).

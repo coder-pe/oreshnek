@@ -85,6 +85,5 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
 
 ## Pendiente (fases posteriores)
 
-- Métricas `/metrics` (Fase 6, en curso).
 - Cabeceras de seguridad (HSTS, X-Frame-Options) además del CORS ya disponible.
-- Timeout de handler (`504`) con cancelación cooperativa de workers (Fase 6).
+- Compresión gzip/brotli y HTTP/2 (opcionales de Fase 6).

@@ -131,9 +131,23 @@ tienen un worker en vuelo y aplica, según su estado:
 - **write_timeout** — una respuesta que el peer no termina de drenar: se cierra.
 - **idle_timeout** — una conexión keep-alive ociosa a la espera de otra petición:
   se cierra.
+- **handler_timeout** — un worker que excede su deadline ejecutando el handler:
+  se responde `504` y se cierra la conexión. El worker **no se cancela** (no es
+  seguro interrumpir código arbitrario); sigue corriendo y su resultado tardío se
+  descarta por el guard de liveness de `process_completions`.
 
-Los tres son configurables (`Server::Settings`, poblados desde `ServerConfig`); un
+Todos son configurables (`Server::Settings`, poblados desde `ServerConfig`); un
 valor de `0` desactiva el timeout correspondiente.
+
+## Métricas
+
+Con `metrics.enabled`, `Server::enable_metrics(path)` registra un `GET` que expone
+`Metrics::render()` en formato de texto Prometheus: contadores (`requests_total`,
+respuestas por clase 2xx–5xx, `connections_accepted_total`, `rate_limited_total`,
+`handler_timeouts_total`), un gauge de conexiones activas y un histograma de
+duración de petición. Todos los contadores son atómicos: el event loop los
+actualiza (accept/close/rate-limit/handler-timeout) y los workers registran la
+clase de status y la latencia por respuesta, sin locks.
 
 ## Rate limiting
 
