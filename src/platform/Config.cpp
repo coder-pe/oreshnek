@@ -96,6 +96,12 @@ ServerConfig Config::load(const std::string& path) {
                 assign_if_present(*tls, "min_version", cfg.tls.min_version);
             }
 
+            if (auto rl = config.find("rate_limit"); rl != config.end() && rl->is_object()) {
+                assign_if_present(*rl, "enabled", cfg.rate_limit.enabled);
+                assign_if_present(*rl, "requests_per_second", cfg.rate_limit.requests_per_second);
+                assign_if_present(*rl, "burst", cfg.rate_limit.burst);
+            }
+
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);
             assign_if_present(config, "cors_allow_origin", cfg.cors_allow_origin);
 

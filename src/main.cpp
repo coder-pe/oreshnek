@@ -201,6 +201,12 @@ int main(int argc, char** argv) {
             server.enable_tls(g_server_config.tls.cert_file, g_server_config.tls.key_file,
                               g_server_config.tls.min_version);
         }
+
+        // Enable per-IP rate limiting if configured.
+        if (g_server_config.rate_limit.enabled) {
+            server.enable_rate_limit(g_server_config.rate_limit.requests_per_second,
+                                     g_server_config.rate_limit.burst);
+        }
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers

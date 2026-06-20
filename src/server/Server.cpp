@@ -132,6 +132,12 @@ void Server::enable_tls(const std::string& cert_file, const std::string& key_fil
     tls_ctx_ = std::make_unique<Net::TlsContext>(cert_file, key_file, min_version);
 }
 
+void Server::enable_rate_limit(double requests_per_second, double burst) {
+    rate_limiter_ = std::make_unique<TokenBucketLimiter>(requests_per_second, burst);
+    ORE_LOG(INFO) << "Rate limiting enabled: " << requests_per_second
+                  << " req/s per IP (burst " << burst << ")";
+}
+
 void Server::set_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
@@ -541,6 +547,10 @@ void Server::handle_new_connection() {
         }
 #endif
         auto conn = std::make_shared<Net::Connection>(client_fd);
+        char ipbuf[INET_ADDRSTRLEN] = {0};
+        if (inet_ntop(AF_INET, &client_addr.sin_addr, ipbuf, sizeof(ipbuf)) != nullptr) {
+            conn->client_ip_ = ipbuf;
+        }
         if (tls_ctx_) {
             SSL* ssl = tls_ctx_->new_session(client_fd);
             if (ssl == nullptr) {
@@ -562,6 +572,21 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
 
     size_t consumed = 0;
     if (conn->parse_next(consumed)) {
+        // Rate limit per client IP before doing the owning copy or spawning a
+        // worker: a throttled request is answered with 429 directly here.
+        if (rate_limiter_ && !rate_limiter_->allow(conn->client_ip_)) {
+            conn->consume(consumed);
+            conn->processing_ = true;
+            Http::HttpResponse res;
+            nlohmann::json err;
+            err["error"] = "Too Many Requests";
+            res.status(Http::HttpStatus::TOO_MANY_REQUESTS).json(err);
+            res.header("Retry-After", "1");
+            conn->set_response_content(res);
+            rearm(fd, /*read=*/false);
+            return;
+        }
+
         // Take an owning copy of the request so it can safely outlive the
         // socket buffer and be handed to a worker thread.
         auto request = std::make_shared<Http::HttpRequest>(std::move(conn->current_request_));
@@ -815,6 +840,9 @@ void Server::enforce_timeouts() {
     for (int fd : idle_or_write_timeouts) {
         close_connection(fd);
     }
+
+    // Bound the rate-limiter's memory by dropping idle (refilled) buckets.
+    if (rate_limiter_) rate_limiter_->evict_idle();
 }
 
 } // namespace Server

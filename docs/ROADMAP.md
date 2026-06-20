@@ -125,7 +125,9 @@ backend ligero (dev/tests/embebido). Diseño detallado en
   (`ORESHNEK_TLS_CERT`/`ORESHNEK_TLS_KEY`). Test `tls_test` (verde normal/ASan/TSan).
 - ✅ **Envío de body optimizado** con offset en vez de `erase(0,n)` O(n²) — ya
   resuelto en la Fase 3 (`write_body_offset_`).
-- ⬜ Rate limiting (token bucket por IP).
+- ✅ **Rate limiting** (token bucket por IP) en el event loop: rechaza con `429`
+  antes de gastar un worker; `enabled`/`requests_per_second`/`burst` por config.
+  Test `rate_limit_test` (unit + e2e, verde normal/ASan/TSan).
 - ⬜ Métricas Prometheus (`/metrics`).
 - ⬜ Timeout de handler (`504`) con cancelación cooperativa de workers.
 - ⬜ (Opcional) compresión gzip/brotli, HTTP/2 (`nghttp2`).

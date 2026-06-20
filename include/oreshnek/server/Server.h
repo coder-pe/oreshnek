@@ -4,6 +4,7 @@
 
 #include "oreshnek/server/Router.h"
 #include "oreshnek/server/ThreadPool.h"
+#include "oreshnek/server/RateLimiter.h"
 #include "oreshnek/net/Connection.h"
 #include "oreshnek/http/HttpRequest.h"
 #include "oreshnek/http/HttpResponse.h"
@@ -56,6 +57,8 @@ private:
     // Non-null when TLS is enabled; shared (read-only) to mint per-connection
     // SSL objects on accept.
     std::unique_ptr<Net::TlsContext> tls_ctx_;
+    // Non-null when rate limiting is enabled. Touched only by the event loop.
+    std::unique_ptr<TokenBucketLimiter> rate_limiter_;
 
     // Middleware chain, run before the handler in registration order. Populated
     // before run() and only read (never mutated) by worker threads afterwards.
@@ -108,6 +111,9 @@ public:
     // listen()/run().
     void enable_tls(const std::string& cert_file, const std::string& key_file,
                     const std::string& min_version);
+
+    // Enable per-IP token-bucket rate limiting. Call before listen()/run().
+    void enable_rate_limit(double requests_per_second, double burst);
 
     // Register a middleware. Middlewares run before the matched handler in
     // registration order. Call before listen()/run(); not thread-safe to call
