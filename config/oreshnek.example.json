@@ -64,6 +64,13 @@
     "path": "/metrics"
   },
 
+  "compression": {
+    "_comment": "gzip/brotli for compressible text (JSON, HTML, HLS/DASH manifests); never for files/video.",
+    "enabled": true,
+    "min_bytes": 256,
+    "brotli": true
+  },
+
   "cors_enabled": false,
   "cors_allow_origin": "*"
 }

@@ -1,6 +1,7 @@
 // oreshnek/src/server/Server.cpp
 #include "oreshnek/server/Server.h"
 #include "oreshnek/net/TlsContext.h"
+#include "oreshnek/http/Compression.h"
 #include "oreshnek/utils/Logger.h"
 #include <iostream>
 #include <fcntl.h>    // For fcntl
@@ -11,7 +12,10 @@
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
 #include <cstdio>     // For snprintf (HTTP date / ETag formatting)
+#include <cstdlib>    // For atof (Accept-Encoding q-values)
+#include <cctype>     // For tolower / isalnum
 #include <ctime>      // For gmtime_r / strptime / timegm
+#include <variant>    // For std::holds_alternative / std::get (response body)
 #include <vector>     // For cleanup_expired_connections
 #include <utility>    // For std::swap
 
@@ -168,6 +172,83 @@ void apply_http_semantics(const Http::HttpRequest& req, Http::HttpResponse& res)
     res.header("Content-Length", std::to_string(length));
     res.set_file_range(start, length);
 }
+
+// Whether a (lowercased) content type is worth compressing.
+bool is_compressible_type(const std::string& ct_lower) {
+    if (ct_lower.rfind("text/", 0) == 0) return true;
+    static const char* kTypes[] = {
+        "application/json", "application/javascript", "application/xml",
+        "application/x-mpegurl", "application/vnd.apple.mpegurl",
+        "application/dash+xml", "application/manifest+json", "image/svg+xml",
+    };
+    for (const char* t : kTypes) {
+        if (ct_lower.rfind(t, 0) == 0) return true;
+    }
+    return false;
+}
+
+// Token-aware Accept-Encoding check that honours an explicit "q=0" refusal.
+bool accepts_encoding(const std::string& ae_lower, const std::string& token) {
+    size_t p = 0;
+    while ((p = ae_lower.find(token, p)) != std::string::npos) {
+        const size_t end = p + token.size();
+        const bool lb = (p == 0) || !std::isalnum(static_cast<unsigned char>(ae_lower[p - 1]));
+        const bool rb = (end == ae_lower.size()) ||
+                        !std::isalnum(static_cast<unsigned char>(ae_lower[end]));
+        if (lb && rb) {
+            const size_t comma = ae_lower.find(',', end);
+            const size_t q = ae_lower.find("q=", end);
+            if (q != std::string::npos && (comma == std::string::npos || q < comma)) {
+                if (std::atof(ae_lower.c_str() + q + 2) == 0.0) { p = end; continue; }
+            }
+            return true;
+        }
+        p = end;
+    }
+    return false;
+}
+
+// Compress a string-body response in place when the client accepts it and the
+// content is compressible and worth it. Never touches file responses, so
+// sendfile and (crucially) video bytes are left untouched.
+void maybe_compress(const Http::HttpRequest& req, Http::HttpResponse& res,
+                    std::size_t min_bytes, bool allow_brotli) {
+    if (res.is_file() || res.head_only()) return;
+    if (!std::holds_alternative<std::string>(res.get_body_variant())) return;
+
+    const auto& headers = res.get_headers();
+    if (headers.find("Content-Encoding") != headers.end()) return; // already encoded
+
+    const std::string& body = std::get<std::string>(res.get_body_variant());
+    if (body.size() < min_bytes) return;
+
+    auto ct_it = headers.find("Content-Type");
+    std::string ct = ct_it != headers.end() ? ct_it->second : "";
+    for (char& c : ct) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (!is_compressible_type(ct)) return;
+
+    auto accept = req.header("Accept-Encoding");
+    if (!accept) return;
+    std::string ae(*accept);
+    for (char& c : ae) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    std::string encoded;
+    const char* coding = nullptr;
+    if (allow_brotli && accepts_encoding(ae, "br")) {
+        encoded = Http::brotli_compress(body);
+        coding = "br";
+    } else if (accepts_encoding(ae, "gzip")) {
+        encoded = Http::gzip_compress(body);
+        coding = "gzip";
+    } else {
+        return;
+    }
+    if (encoded.empty() || encoded.size() >= body.size()) return; // no gain / failed
+
+    res.body(std::move(encoded));            // updates Content-Length
+    res.header("Content-Encoding", coding);
+    res.header("Vary", "Accept-Encoding");
+}
 }  // namespace
 
 Server::Server(size_t worker_threads)
@@ -205,6 +286,14 @@ void Server::enable_metrics(const std::string& path) {
                            res.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
                        });
     ORE_LOG(INFO) << "Metrics exposed at GET " << path;
+}
+
+void Server::enable_compression(std::size_t min_bytes, bool allow_brotli) {
+    compression_enabled_ = true;
+    compression_min_bytes_ = min_bytes;
+    compression_brotli_ = allow_brotli && Http::brotli_available();
+    ORE_LOG(INFO) << "Response compression enabled (min " << min_bytes << " bytes, brotli "
+                  << (compression_brotli_ ? "on" : "off") << ", gzip on)";
 }
 
 void Server::set_non_blocking(int fd) {
@@ -722,6 +811,12 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
                 nlohmann::json err;
                 err["error"] = "Not Found";
                 res.status(Http::HttpStatus::NOT_FOUND).json(err);
+            }
+
+            // Compress the (string) body if negotiated, before HEAD suppression
+            // so Content-Length matches what an equivalent GET would send.
+            if (compression_enabled_) {
+                maybe_compress(*request, res, compression_min_bytes_, compression_brotli_);
             }
 
             // Apply request-driven response semantics (Range for file responses,

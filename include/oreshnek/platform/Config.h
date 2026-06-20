@@ -55,6 +55,14 @@ struct MetricsConfig {
     std::string path = "/metrics";
 };
 
+// Response compression (gzip/brotli) for compressible text bodies (JSON, HTML,
+// HLS/DASH manifests, ...). Never applies to file responses or binary content.
+struct CompressionConfig {
+    bool enabled = true;
+    std::size_t min_bytes = 256; // smaller bodies are not worth compressing
+    bool brotli = true;          // prefer brotli when the client accepts it
+};
+
 // Runtime configuration, loadable from an external JSON file (see Config::load).
 struct ServerConfig {
     int port = 8080;
@@ -91,6 +99,9 @@ struct ServerConfig {
 
     // Prometheus metrics endpoint.
     MetricsConfig metrics;
+
+    // Response compression.
+    CompressionConfig compression;
 
     // CORS (applied by the built-in CORS middleware when enabled).
     bool cors_enabled = false;

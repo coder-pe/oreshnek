@@ -108,6 +108,12 @@ ServerConfig Config::load(const std::string& path) {
                 assign_if_present(*m, "path", cfg.metrics.path);
             }
 
+            if (auto cz = config.find("compression"); cz != config.end() && cz->is_object()) {
+                assign_if_present(*cz, "enabled", cfg.compression.enabled);
+                assign_if_present(*cz, "min_bytes", cfg.compression.min_bytes);
+                assign_if_present(*cz, "brotli", cfg.compression.brotli);
+            }
+
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);
             assign_if_present(config, "cors_allow_origin", cfg.cors_allow_origin);
 

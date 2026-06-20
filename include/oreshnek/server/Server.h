@@ -63,6 +63,11 @@ private:
     // Server metrics (atomic; updated by the event loop and workers).
     Metrics metrics_;
 
+    // Response compression (read-only by workers after setup).
+    bool compression_enabled_ = false;
+    std::size_t compression_min_bytes_ = 256;
+    bool compression_brotli_ = true;
+
     // Middleware chain, run before the handler in registration order. Populated
     // before run() and only read (never mutated) by worker threads afterwards.
     std::vector<Middleware> middlewares_;
@@ -121,6 +126,10 @@ public:
 
     // Register a GET route that exposes server metrics in Prometheus text format.
     void enable_metrics(const std::string& path);
+
+    // Enable response compression (gzip/brotli) for compressible text bodies
+    // above `min_bytes`. Call before listen()/run().
+    void enable_compression(std::size_t min_bytes, bool allow_brotli);
 
     // Access the live metrics (e.g. for tests).
     const Metrics& metrics() const { return metrics_; }

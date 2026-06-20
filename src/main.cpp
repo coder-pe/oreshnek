@@ -213,6 +213,12 @@ int main(int argc, char** argv) {
         if (g_server_config.metrics.enabled) {
             server.enable_metrics(g_server_config.metrics.path);
         }
+
+        // Enable response compression (gzip/brotli for text/JSON/manifests).
+        if (g_server_config.compression.enabled) {
+            server.enable_compression(g_server_config.compression.min_bytes,
+                                      g_server_config.compression.brotli);
+        }
         g_server = &server; // Set global pointer for signal handling
 
         // Setup signal handlers
