@@ -14,6 +14,7 @@ endif()
 option(ORESHNEK_ASAN  "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(ORESHNEK_TSAN  "Build with ThreadSanitizer" OFF)
 option(ORESHNEK_BUILD_TESTS "Build the test suite" ON)
+option(ORESHNEK_BUILD_EXAMPLES "Build the example programs (examples/)" ON)
 
 if(ORESHNEK_ASAN AND ORESHNEK_TSAN)
     message(FATAL_ERROR "ORESHNEK_ASAN and ORESHNEK_TSAN are mutually exclusive.")
@@ -97,6 +98,11 @@ target_compile_options(oreshnek PRIVATE -Wall -Wextra -pedantic)
 add_executable(oreshnek_server src/main.cpp)
 target_link_libraries(oreshnek_server PRIVATE oreshnek oreshnek_sanitizers)
 target_compile_options(oreshnek_server PRIVATE -Wall -Wextra -pedantic)
+
+# --- Examples ----------------------------------------------------------------
+if(ORESHNEK_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 
 # --- Tests -------------------------------------------------------------------
 if(ORESHNEK_BUILD_TESTS)
