@@ -18,6 +18,7 @@ enum class HttpStatus {
     ACCEPTED = 202,
     NO_CONTENT = 204,
     PARTIAL_CONTENT = 206,
+    NOT_MODIFIED = 304,
     BAD_REQUEST = 400,
     UNAUTHORIZED = 401,
     FORBIDDEN = 403,
@@ -56,6 +57,7 @@ inline const char* http_status_to_string(HttpStatus status) {
         case HttpStatus::ACCEPTED: return "Accepted";
         case HttpStatus::NO_CONTENT: return "No Content";
         case HttpStatus::PARTIAL_CONTENT: return "Partial Content";
+        case HttpStatus::NOT_MODIFIED: return "Not Modified";
         case HttpStatus::BAD_REQUEST: return "Bad Request";
         case HttpStatus::UNAUTHORIZED: return "Unauthorized";
         case HttpStatus::FORBIDDEN: return "Forbidden";

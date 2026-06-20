@@ -265,8 +265,12 @@ int main(int argc, char** argv) {
             else if (relative_path.ends_with(".jpg") || relative_path.ends_with(".jpeg")) content_type = "image/jpeg";
             else if (relative_path.ends_with(".html") || relative_path.ends_with(".htm")) content_type = "text/html";
 
-            std::cerr << "DEBUG: Serving static file: " << file_path << " with Content-Type: " << content_type << "\n";
-            res.status(Oreshnek::Http::HttpStatus::OK).file(file_path, content_type); // This sets the response to be a file
+            res.status(Oreshnek::Http::HttpStatus::OK).file(file_path, content_type);
+            // Let the browser cache static assets instead of re-downloading them on
+            // every refresh. The framework also adds ETag/Last-Modified, so after
+            // this window the browser revalidates and gets a cheap 304. Lower this
+            // (or use "no-cache") while iterating on CSS/JS in development.
+            res.header("Cache-Control", "public, max-age=3600");
         });
 
         // Serve home page

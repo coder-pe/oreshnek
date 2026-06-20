@@ -10,6 +10,8 @@
 #include <arpa/inet.h>  // For inet_ntoa
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
+#include <cstdio>     // For snprintf (HTTP date / ETag formatting)
+#include <ctime>      // For gmtime_r / strptime / timegm
 #include <vector>     // For cleanup_expired_connections
 #include <utility>    // For std::swap
 
@@ -33,10 +35,43 @@ namespace Oreshnek {
 namespace Server {
 
 namespace {
+// Format a time_t as an RFC 1123 HTTP date (locale-independent).
+std::string http_date(time_t t) {
+    static const char* kDays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static const char* kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    struct tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%s, %02d %s %04d %02d:%02d:%02d GMT",
+                  kDays[tm.tm_wday], tm.tm_mday, kMonths[tm.tm_mon], tm.tm_year + 1900,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return buf;
+}
+
+// Parse an RFC 1123 HTTP date; (time_t)-1 on failure.
+time_t parse_http_date(const std::string& s) {
+    struct tm tm{};
+    if (strptime(s.c_str(), "%a, %d %b %Y %H:%M:%S GMT", &tm) != nullptr) {
+        return timegm(&tm);
+    }
+    return static_cast<time_t>(-1);
+}
+
+// Strong validator from size + mtime: "<size>-<mtime>".
+std::string make_etag(const struct stat& st) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "\"%llx-%llx\"",
+                  static_cast<unsigned long long>(st.st_size),
+                  static_cast<unsigned long long>(st.st_mtime));
+    return buf;
+}
+
 // Applies request-driven semantics to a freshly produced response:
 //  * HEAD requests: suppress the body (headers only).
-//  * File responses: advertise Accept-Ranges and, if the request carries a
-//    single byte Range, switch to 206 Partial Content (or 416 if unsatisfiable).
+//  * File responses: advertise Accept-Ranges, set cache validators (ETag /
+//    Last-Modified) and answer a matching conditional GET with 304; and, if the
+//    request carries a single byte Range, switch to 206 Partial Content (or 416).
 // Only a single range is supported; multi-range requests fall back to 200.
 void apply_http_semantics(const Http::HttpRequest& req, Http::HttpResponse& res) {
     if (req.method() == Http::HttpMethod::HEAD) {
@@ -48,6 +83,31 @@ void apply_http_semantics(const Http::HttpRequest& req, Http::HttpResponse& res)
     if (::stat(res.file_path().c_str(), &st) != 0) return; // handler already validated existence
     const off_t size = st.st_size;
     res.header("Accept-Ranges", "bytes");
+
+    // Cache validators so browsers/proxies can revalidate cheaply instead of
+    // re-downloading the body on every refresh.
+    const std::string etag = make_etag(st);
+    res.header("ETag", etag);
+    res.header("Last-Modified", http_date(st.st_mtime));
+
+    // Conditional GET -> 304 Not Modified (no body). If-None-Match takes
+    // precedence over If-Modified-Since (RFC 7232).
+    const bool safe_method = req.method() == Http::HttpMethod::GET ||
+                             req.method() == Http::HttpMethod::HEAD;
+    bool not_modified = false;
+    if (auto inm = req.header("If-None-Match")) {
+        not_modified = (*inm == "*") || (inm->find(etag) != std::string_view::npos);
+    } else if (auto ims = req.header("If-Modified-Since")) {
+        const time_t since = parse_http_date(std::string(*ims));
+        not_modified = (since != static_cast<time_t>(-1)) && (st.st_mtime <= since);
+    }
+    if (safe_method && not_modified) {
+        res.status(Http::HttpStatus::NOT_MODIFIED);
+        res.header("Content-Length", "0");
+        res.set_head_only(true);   // 304 carries no body
+        res.set_file_range(0, 0);  // do not stream the file
+        return;
+    }
 
     auto range_hdr = req.header("Range");
     if (!range_hdr) {
