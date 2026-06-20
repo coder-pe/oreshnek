@@ -63,6 +63,7 @@ ServerConfig Config::load(const std::string& path) {
             assign_if_present(config, "write_timeout_sec", cfg.write_timeout_sec);
             assign_if_present(config, "idle_timeout_sec", cfg.idle_timeout_sec);
             assign_if_present(config, "shutdown_grace_sec", cfg.shutdown_grace_sec);
+            assign_if_present(config, "handler_timeout_sec", cfg.handler_timeout_sec);
 
             assign_if_present(config, "log_level", cfg.log_level);
             assign_if_present(config, "log_file", cfg.log_file);
@@ -100,6 +101,11 @@ ServerConfig Config::load(const std::string& path) {
                 assign_if_present(*rl, "enabled", cfg.rate_limit.enabled);
                 assign_if_present(*rl, "requests_per_second", cfg.rate_limit.requests_per_second);
                 assign_if_present(*rl, "burst", cfg.rate_limit.burst);
+            }
+
+            if (auto m = config.find("metrics"); m != config.end() && m->is_object()) {
+                assign_if_present(*m, "enabled", cfg.metrics.enabled);
+                assign_if_present(*m, "path", cfg.metrics.path);
             }
 
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);

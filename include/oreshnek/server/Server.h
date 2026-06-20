@@ -5,6 +5,7 @@
 #include "oreshnek/server/Router.h"
 #include "oreshnek/server/ThreadPool.h"
 #include "oreshnek/server/RateLimiter.h"
+#include "oreshnek/server/Metrics.h"
 #include "oreshnek/net/Connection.h"
 #include "oreshnek/http/HttpRequest.h"
 #include "oreshnek/http/HttpResponse.h"
@@ -59,6 +60,8 @@ private:
     std::unique_ptr<Net::TlsContext> tls_ctx_;
     // Non-null when rate limiting is enabled. Touched only by the event loop.
     std::unique_ptr<TokenBucketLimiter> rate_limiter_;
+    // Server metrics (atomic; updated by the event loop and workers).
+    Metrics metrics_;
 
     // Middleware chain, run before the handler in registration order. Populated
     // before run() and only read (never mutated) by worker threads afterwards.
@@ -98,6 +101,7 @@ public:
         int write_timeout_sec = 30;    // Stalled response write -> drop.
         int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
         int shutdown_grace_sec = 10;   // Drain budget for graceful shutdown.
+        int handler_timeout_sec = 30;  // Worker/handler deadline -> 504.
     };
 
     Server(size_t worker_threads = std::thread::hardware_concurrency());
@@ -114,6 +118,12 @@ public:
 
     // Enable per-IP token-bucket rate limiting. Call before listen()/run().
     void enable_rate_limit(double requests_per_second, double burst);
+
+    // Register a GET route that exposes server metrics in Prometheus text format.
+    void enable_metrics(const std::string& path);
+
+    // Access the live metrics (e.g. for tests).
+    const Metrics& metrics() const { return metrics_; }
 
     // Register a middleware. Middlewares run before the matched handler in
     // registration order. Call before listen()/run(); not thread-safe to call
@@ -190,9 +200,12 @@ private:
     // connection still buffering a request past read_timeout gets a 408 first.
     void enforce_timeouts();
 
-    // Best-effort "408 Request Timeout" written synchronously before closing a
-    // connection that took too long to send its request.
+    // Best-effort write of a minimal status-only response (TLS-aware) before
+    // closing a timed-out connection.
+    void send_minimal_response(int fd, const char* bytes, size_t len);
+    // 408: request took too long to arrive. 504: handler exceeded its deadline.
     void send_request_timeout(int fd);
+    void send_handler_timeout(int fd);
 
     Settings settings_;
 };

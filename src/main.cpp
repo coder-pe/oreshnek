@@ -190,7 +190,8 @@ int main(int argc, char** argv) {
             g_server_config.read_timeout_sec,
             g_server_config.write_timeout_sec,
             g_server_config.idle_timeout_sec,
-            g_server_config.shutdown_grace_sec});
+            g_server_config.shutdown_grace_sec,
+            g_server_config.handler_timeout_sec});
 
         // Enable HTTPS if configured (throws on an invalid certificate/key).
         if (g_server_config.tls.enabled) {
@@ -206,6 +207,11 @@ int main(int argc, char** argv) {
         if (g_server_config.rate_limit.enabled) {
             server.enable_rate_limit(g_server_config.rate_limit.requests_per_second,
                                      g_server_config.rate_limit.burst);
+        }
+
+        // Expose Prometheus metrics if configured.
+        if (g_server_config.metrics.enabled) {
+            server.enable_metrics(g_server_config.metrics.path);
         }
         g_server = &server; // Set global pointer for signal handling
 

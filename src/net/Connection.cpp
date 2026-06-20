@@ -46,6 +46,7 @@ void Connection::reset() {
     current_request_ = Http::HttpRequest(); // Reset HttpRequest
     keep_alive_ = true; // Assume keep-alive by default for new requests
     processing_ = false;
+    worker_in_flight_ = false;
     continue_sent_ = false;
     clear_response_state();
     update_activity();

@@ -16,6 +16,7 @@
   "write_timeout_sec": 30,
   "idle_timeout_sec": 60,
   "shutdown_grace_sec": 10,
+  "handler_timeout_sec": 30,
 
   "log_level": "info",
   "log_file": "",
@@ -55,6 +56,12 @@
     "enabled": false,
     "requests_per_second": 50,
     "burst": 100
+  },
+
+  "metrics": {
+    "_comment": "Prometheus text-format metrics exposed at the given GET path.",
+    "enabled": false,
+    "path": "/metrics"
   },
 
   "cors_enabled": false,

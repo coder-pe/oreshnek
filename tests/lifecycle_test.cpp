@@ -134,11 +134,41 @@ void test_read_timeout(int port) {
 
     check(resp.find("408") != std::string::npos, "read-timeout: slow request got 408");
 }
+
+// --- Test 3: handler timeout returns 504 ------------------------------------
+void test_handler_timeout(int port) {
+    Server::Server server(2);
+    // read, write, idle, grace, handler=1s
+    server.configure(Server::Server::Settings{30, 5, 30, 5, 1});
+    server.get("/slow", [](const Http::HttpRequest&, Http::HttpResponse& res) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2500)); // exceeds 1s
+        res.status(Http::HttpStatus::OK).text("late");
+    });
+
+    if (!server.listen(kHost, port)) {
+        check(false, "handler-timeout: server failed to listen");
+        return;
+    }
+    std::thread loop([&server] { server.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    int fd = connect_to(port);
+    check(fd >= 0, "handler-timeout: connected");
+    send_all(fd, "GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+
+    std::string resp = read_until_eof(fd, 4000);
+    ::close(fd);
+    server.request_stop();
+    loop.join();
+
+    check(resp.find("504") != std::string::npos, "handler-timeout: slow handler got 504");
+}
 }  // namespace
 
 int main() {
     test_graceful_drain(18091);
     test_read_timeout(18092);
+    test_handler_timeout(18096);
 
     if (g_failures == 0) {
         std::cout << "[OK] all lifecycle tests passed" << std::endl;
