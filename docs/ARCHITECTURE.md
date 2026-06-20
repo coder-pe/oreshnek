@@ -41,6 +41,13 @@ dirigidas por la petición (`apply_http_semantics`): cabecera `Accept-Ranges`,
 `Range` → `206 Partial Content`/`416`, y supresión del cuerpo para `HEAD`. El
 descriptor del fichero lo gestiona y cierra el event loop en `Connection`.
 
+**Caché.** Toda respuesta de fichero incluye validadores `ETag` (de tamaño+mtime)
+y `Last-Modified`. Una petición condicional que casa (`If-None-Match` o
+`If-Modified-Since`) se responde con `304 Not Modified` **sin cuerpo**, evitando
+re-descargar el fichero en cada refresco. La política de frescura (`Cache-Control`,
+`max-age`) la decide el handler (el ejemplo la fija para los estáticos); el
+framework solo provee los validadores y la revalidación condicional.
+
 ## Ciclo de vida de una petición (modelo Fase 1)
 
 El principio central: **solo el hilo del event loop toca los objetos

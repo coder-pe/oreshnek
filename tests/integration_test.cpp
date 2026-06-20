@@ -169,6 +169,20 @@ std::string make_request(const std::string& method, const std::string& path,
     return req;
 }
 
+// Return the value of header `name` (lowercase) from a raw header block, or "".
+std::string extract_header(const std::string& headers, const std::string& name) {
+    std::string lower = headers;
+    for (char& c : lower) c = static_cast<char>(::tolower(c));
+    const std::string key = name + ":";
+    size_t p = lower.find(key);
+    if (p == std::string::npos) return "";
+    p += key.size();
+    while (p < headers.size() && (headers[p] == ' ' || headers[p] == '\t')) ++p;
+    size_t end = headers.find("\r\n", p);
+    if (end == std::string::npos) end = headers.size();
+    return headers.substr(p, end - p);
+}
+
 // Known file content served by the /file route, written to disk in main().
 std::string g_file_content;
 std::string g_file_path;
@@ -345,6 +359,39 @@ void test_expect_continue() {
     check(resp.body == "hello", "expect: echoed body == hello, got '" + resp.body + "'");
 }
 
+// Cache validators + conditional GET: a file response carries ETag/Last-Modified,
+// and a matching If-None-Match revalidates to 304 with no body.
+void test_conditional_get() {
+    Client c;
+    check(c.connect(), "cond: connect");
+
+    Client::Response r1;
+    check(c.send_all(make_request("GET", "/file")), "cond: send GET");
+    check(c.read_response(r1), "cond: read GET");
+    check(r1.status == 200, "cond: first GET is 200");
+    check(r1.has_header("ETag:"), "cond: response carries ETag");
+    check(r1.has_header("Last-Modified:"), "cond: response carries Last-Modified");
+
+    const std::string etag = extract_header(r1.headers, "etag");
+    check(!etag.empty(), "cond: parsed ETag value");
+
+    // Matching ETag -> 304 Not Modified, empty body.
+    Client::Response r2;
+    check(c.send_all(make_request("GET", "/file", "", "If-None-Match: " + etag + "\r\n")),
+          "cond: send If-None-Match");
+    check(c.read_response(r2), "cond: read revalidation");
+    check(r2.status == 304, "cond: matching ETag revalidates to 304");
+    check(r2.body.empty(), "cond: 304 has no body");
+
+    // Non-matching ETag -> full 200 with the body again.
+    Client::Response r3;
+    check(c.send_all(make_request("GET", "/file", "", "If-None-Match: \"nope\"\r\n")),
+          "cond: send stale If-None-Match");
+    check(c.read_response(r3), "cond: read full");
+    check(r3.status == 200, "cond: non-matching ETag returns 200");
+    check(r3.body.size() == g_file_content.size(), "cond: 200 returns the full body");
+}
+
 }  // namespace
 
 int main() {
@@ -389,6 +436,7 @@ int main() {
     test_head();
     test_chunked();
     test_expect_continue();
+    test_conditional_get();
 
     // Correct shutdown contract: signal the loop, then join its thread. run()
     // tears down its own connections/fds; the Server destructor stops the pool.
