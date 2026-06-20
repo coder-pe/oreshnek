@@ -26,6 +26,7 @@ enum class HttpStatus {
     CONFLICT = 409,
     PAYLOAD_TOO_LARGE = 413,
     RANGE_NOT_SATISFIABLE = 416,
+    TOO_MANY_REQUESTS = 429,
     INTERNAL_SERVER_ERROR = 500,
     NOT_IMPLEMENTED = 501,
     SERVICE_UNAVAILABLE = 503
@@ -63,6 +64,7 @@ inline const char* http_status_to_string(HttpStatus status) {
         case HttpStatus::CONFLICT: return "Conflict";
         case HttpStatus::PAYLOAD_TOO_LARGE: return "Payload Too Large";
         case HttpStatus::RANGE_NOT_SATISFIABLE: return "Range Not Satisfiable";
+        case HttpStatus::TOO_MANY_REQUESTS: return "Too Many Requests";
         case HttpStatus::INTERNAL_SERVER_ERROR: return "Internal Server Error";
         case HttpStatus::NOT_IMPLEMENTED: return "Not Implemented";
         case HttpStatus::SERVICE_UNAVAILABLE: return "Service Unavailable";

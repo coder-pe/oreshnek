@@ -61,6 +61,9 @@ public:
     std::chrono::steady_clock::time_point last_activity_;
     bool keep_alive_ = true;
 
+    // Peer IP (dotted-quad), captured at accept; used as the rate-limit key.
+    std::string client_ip_;
+
     // True while a request from this connection is being handled by a worker or
     // its response is still being written. Guards against dispatching more than
     // one request at a time (preserves HTTP/1.1 response ordering) and against

@@ -42,6 +42,13 @@ struct TlsConfig {
     std::string min_version = "1.2";  // "1.2" | "1.3"
 };
 
+// Per-IP token-bucket rate limiting.
+struct RateLimitConfig {
+    bool enabled = false;
+    double requests_per_second = 50.0; // sustained refill rate
+    double burst = 100.0;              // bucket capacity (peak allowance)
+};
+
 // Runtime configuration, loadable from an external JSON file (see Config::load).
 struct ServerConfig {
     int port = 8080;
@@ -71,6 +78,9 @@ struct ServerConfig {
 
     // TLS / HTTPS.
     TlsConfig tls;
+
+    // Rate limiting (per client IP, enforced in the event loop).
+    RateLimitConfig rate_limit;
 
     // CORS (applied by the built-in CORS middleware when enabled).
     bool cors_enabled = false;

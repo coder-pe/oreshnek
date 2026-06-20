@@ -50,6 +50,13 @@
     "min_version": "1.2"
   },
 
+  "rate_limit": {
+    "_comment": "Per-IP token bucket: sustained requests_per_second with a peak of burst.",
+    "enabled": false,
+    "requests_per_second": 50,
+    "burst": 100
+  },
+
   "cors_enabled": false,
   "cors_allow_origin": "*"
 }
