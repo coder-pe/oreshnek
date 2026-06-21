@@ -1,12 +1,12 @@
 // tests/db_test.cpp
 //
-// Fase 4 tests for the SQLite connection pool (WAL + busy_timeout): a basic
-// CRUD roundtrip plus concurrent writers/readers across the pool, which under
-// ThreadSanitizer also guards the pool's own synchronization.
+// Tests for the SQLite connection pool (WAL + busy_timeout) through the generic
+// SQL gateway: a basic CRUD roundtrip plus concurrent writers/readers across the
+// pool, which under ThreadSanitizer also guards the pool's own synchronization.
+// The framework is domain-agnostic, so the test owns its schema and SQL.
 
 #include "oreshnek/platform/DatabaseManager.h"
 
-#include <atomic>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -44,23 +44,34 @@ int main() {
         cfg.db.sqlite_busy_timeout_ms = 5000;
         DatabaseManager db(cfg);
 
-        // --- User roundtrip + unique constraint ---------------------------------
-        User u;
-        u.username = "alice";
-        u.email = "alice@example.com";
-        u.password_hash = "hash";
-        u.role = "student";
-        check(db.createUser(u), "createUser succeeds");
+        // The application owns its schema; the framework just runs the SQL.
+        check(db.exec("CREATE TABLE IF NOT EXISTS widgets ("
+                      "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                      "name TEXT UNIQUE NOT NULL, "
+                      "note TEXT, "  // nullable, for the NULL roundtrip below
+                      "hits INTEGER NOT NULL DEFAULT 0);").ok,
+              "create table");
 
-        User got = db.getUserByUsername("alice");
-        check(got.id != 0, "getUserByUsername finds the user");
-        check(got.username == "alice" && got.email == "alice@example.com",
-              "user fields roundtrip");
+        // --- Insert + parameterized read + unique constraint --------------------
+        SqlResult ins = db.exec("INSERT INTO widgets (name) VALUES (?);", {"alice"});
+        check(ins.ok && ins.affected == 1, "insert succeeds (affected == 1)");
+        check(ins.last_insert_id > 0, "insert reports last_insert_id");
 
-        check(!db.createUser(u), "duplicate username/email rejected");
+        SqlResult got = db.query("SELECT id, name, hits FROM widgets WHERE name = ?;", {"alice"});
+        check(got.ok && got.row_count() == 1, "select finds the row");
+        check(got.text(0, got.column("name")) == "alice", "name roundtrips");
+        check(got.integer(0, got.column("hits")) == 0, "default hits == 0");
 
-        User missing = db.getUserByUsername("nobody");
-        check(missing.id == 0, "unknown user returns id 0");
+        check(!db.exec("INSERT INTO widgets (name) VALUES (?);", {"alice"}).ok,
+              "duplicate name rejected (unique constraint)");
+
+        check(db.query("SELECT id FROM widgets WHERE name = ?;", {"nobody"}).empty(),
+              "unknown row yields no tuples");
+
+        // --- NULL roundtrip -----------------------------------------------------
+        db.exec("INSERT INTO widgets (name, note) VALUES (?, ?);", {"nullable", std::nullopt});
+        SqlResult nul = db.query("SELECT note FROM widgets WHERE name = ?;", {"nullable"});
+        check(nul.ok && nul.row_count() == 1 && nul.is_null(0, 0), "SQL NULL roundtrips");
 
         // --- Concurrent writers across the pool ---------------------------------
         constexpr int kThreads = 6;
@@ -69,42 +80,35 @@ int main() {
         for (int t = 0; t < kThreads; ++t) {
             writers.emplace_back([&db, t] {
                 for (int i = 0; i < kPerThread; ++i) {
-                    Video v;
-                    v.title = "video-" + std::to_string(t) + "-" + std::to_string(i);
-                    v.filename = v.title + ".mp4";
-                    v.user_id = 1;
-                    v.is_public = true;
-                    db.createVideo(v);
+                    db.exec("INSERT INTO widgets (name) VALUES (?);",
+                            {"w-" + std::to_string(t) + "-" + std::to_string(i)});
                 }
             });
         }
         for (auto& th : writers) th.join();
 
-        std::vector<Video> all = db.getVideos(/*limit=*/10000, /*offset=*/0);
-        check(static_cast<int>(all.size()) == kThreads * kPerThread,
-              "all concurrently-inserted videos are present");
+        SqlResult count = db.query("SELECT COUNT(*) FROM widgets;");
+        check(count.ok && count.integer(0, 0) == kThreads * kPerThread + 2,
+              "all concurrently-inserted rows are present");
 
         // --- Concurrent increments on one row (writer serialization) ------------
-        check(!all.empty(), "have a video to increment");
-        if (!all.empty()) {
-            const int video_id = all.front().id;
-            constexpr int kIncThreads = 5;
-            constexpr int kIncEach = 20;
-            std::vector<std::thread> bumpers;
-            for (int t = 0; t < kIncThreads; ++t) {
-                bumpers.emplace_back([&db, video_id] {
-                    for (int i = 0; i < kIncEach; ++i) db.incrementViews(video_id);
-                });
-            }
-            for (auto& th : bumpers) th.join();
-
-            int views = -1;
-            for (const auto& v : db.getVideos(10000, 0)) {
-                if (v.id == video_id) { views = v.views; break; }
-            }
-            check(views == kIncThreads * kIncEach,
-                  "incrementViews is exact under concurrency (no lost updates)");
+        const long long wid = ins.last_insert_id;  // the "alice" row
+        constexpr int kIncThreads = 5;
+        constexpr int kIncEach = 20;
+        std::vector<std::thread> bumpers;
+        for (int t = 0; t < kIncThreads; ++t) {
+            bumpers.emplace_back([&db, wid] {
+                for (int i = 0; i < kIncEach; ++i) {
+                    db.exec("UPDATE widgets SET hits = hits + 1 WHERE id = ?;",
+                            {std::to_string(wid)});
+                }
+            });
         }
+        for (auto& th : bumpers) th.join();
+
+        SqlResult hits = db.query("SELECT hits FROM widgets WHERE id = ?;", {std::to_string(wid)});
+        check(hits.ok && hits.integer(0, 0) == kIncThreads * kIncEach,
+              "increments are exact under concurrency (no lost updates)");
     }
 
     remove_db(db_path);

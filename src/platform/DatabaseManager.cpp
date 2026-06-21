@@ -20,29 +20,14 @@ DatabaseManager::Backend DatabaseManager::make_backend(const ServerConfig& confi
 }
 
 DatabaseManager::DatabaseManager(const ServerConfig& config)
-    : backend_(make_backend(config)) {
-    std::visit([](auto& backend) { backend->initializeTables(); }, backend_);
+    : backend_(make_backend(config)) {}
+
+SqlResult DatabaseManager::query(std::string_view sql, const SqlParams& params) {
+    return std::visit([&](auto& backend) { return backend->query(sql, params); }, backend_);
 }
 
-bool DatabaseManager::createUser(const User& user) {
-    return std::visit([&](auto& backend) { return backend->createUser(user); }, backend_);
-}
-
-User DatabaseManager::getUserByUsername(const std::string& username) {
-    return std::visit([&](auto& backend) { return backend->getUserByUsername(username); }, backend_);
-}
-
-bool DatabaseManager::createVideo(const Video& video) {
-    return std::visit([&](auto& backend) { return backend->createVideo(video); }, backend_);
-}
-
-std::vector<Video> DatabaseManager::getVideos(int limit, int offset, const std::string& category) {
-    return std::visit([&](auto& backend) { return backend->getVideos(limit, offset, category); },
-                      backend_);
-}
-
-bool DatabaseManager::incrementViews(int video_id) {
-    return std::visit([&](auto& backend) { return backend->incrementViews(video_id); }, backend_);
+SqlResult DatabaseManager::exec(std::string_view sql, const SqlParams& params) {
+    return std::visit([&](auto& backend) { return backend->exec(sql, params); }, backend_);
 }
 
 }  // namespace Platform
