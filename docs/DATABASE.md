@@ -1,54 +1,83 @@
-# Capa de persistencia — abstracción y PostgreSQL
+# Capa de persistencia — gateway SQL genérico y backends
 
-Estado: **implementado** (Fase 5 del [ROADMAP](ROADMAP.md)). PostgreSQL es la base
-de datos principal; SQLite3 se mantiene como backend ligero (desarrollo, tests,
-despliegues embebidos). Este documento describe el diseño efectivamente
-implementado.
+Estado: **implementado**. La capa de base de datos del framework es un **gateway
+SQL agnóstico del dominio**: ejecuta sentencias parametrizadas y devuelve filas
+genéricas. **No conoce ningún modelo de negocio** (usuarios, vídeos, pedidos…).
+Las aplicaciones definen sus propios modelos y su propio esquema, y mapean las
+filas genéricas (`SqlResult`) a sus structs. PostgreSQL es la base de datos
+principal; SQLite3 se mantiene como backend ligero (desarrollo, tests,
+despliegues embebidos).
+
+> Un ejemplo completo de cómo construir un dominio (una plataforma de vídeo:
+> usuarios + vídeos + repositorio) sobre este gateway está en
+> [`examples/06_video_platform.cpp`](../examples/06_video_platform.cpp). El CRUD
+> mínimo con autenticación está en
+> [`examples/03_rest_crud_db.cpp`](../examples/03_rest_crud_db.cpp).
 
 ## Objetivos
 
-- **Una abstracción, dos backends concretos**: SQLite3 (ya existente) y PostgreSQL
-  (nuevo, vía `libpq`). Extensible en el futuro a Oracle, MySQL, MongoDB,
-  ClickHouse, DB2, etc.
-- **Sin `virtual` / herencia de interfaz**. Se usa **polimorfismo estático**:
-  **CRTP** + **concepts** (C++20) para el contrato, y `std::variant` + `std::visit`
-  para la selección en tiempo de ejecución sin vtables.
+- **Genérico y de propósito general**: el framework no impone modelos. Expone
+  `query()` / `exec()` con consultas parametrizadas y un resultado uniforme.
+- **Una abstracción, dos backends concretos**: SQLite3 y PostgreSQL (vía `libpq`).
+  Extensible a Oracle, MySQL, MongoDB, ClickHouse, DB2, etc.
+- **Sin `virtual` / herencia de interfaz**. Polimorfismo estático: **CRTP** +
+  **concepts** (C++20) para el contrato, y `std::variant` + `std::visit` para la
+  selección en tiempo de ejecución, sin vtables.
 - **Selección por configuración** (`db.backend = "postgres" | "sqlite"`), sin
   recompilar.
-- **Misma política de dependencias**: `libpq` es el cliente C **oficial** de
-  PostgreSQL, extremadamente maduro y sin dependencias extra (encaja con la
-  política de "solo librerías muy maduras"). No se añade `libpqxx`.
+- **Seguridad por defecto**: siempre consultas parametrizadas (nunca concatenación)
+  → anti SQL injection.
+
+## Tipos genéricos
+
+```cpp
+// oreshnek/platform/SqlResult.h
+using SqlParam  = std::optional<std::string>;  // std::nullopt => SQL NULL
+using SqlParams = std::vector<SqlParam>;
+
+class SqlResult {
+public:
+    bool ok = false;            // false ante un error del driver (mensaje en error)
+    std::string error;
+    std::int64_t affected = 0;        // filas afectadas (INSERT/UPDATE/DELETE)
+    std::int64_t last_insert_id = 0;  // rowid nuevo (SQLite; PG solo con RETURNING)
+    std::vector<std::string> columns;
+    std::vector<std::vector<std::optional<std::string>>> rows;  // texto; nullopt = NULL
+
+    std::size_t row_count() const;  bool empty() const;
+    int  column(std::string_view name) const;        // índice por nombre, -1 si no existe
+    bool is_null(std::size_t row, std::size_t col) const;
+    std::string_view text  (std::size_t row, std::size_t col) const;
+    std::int64_t     integer(std::size_t row, std::size_t col, std::int64_t def = 0) const;
+    double           real   (std::size_t row, std::size_t col, double def = 0.0) const;
+    bool             boolean(std::size_t row, std::size_t col) const;  // 0/1 o t/f
+};
+```
+
+Los valores se guardan como **texto** tal cual los devuelve el driver; los
+accesores tipados parsean bajo demanda, de modo que el código de aplicación
+nunca toca tipos de columna específicos del backend ni el manejo de NULL.
 
 ## Diseño
 
 ### 1) Contrato (concept) + base CRTP
 
-El contrato se expresa con un `concept` de C++20 y la base CRTP reenvía cada
-operación pública a un método `*_impl` del concreto (resuelto en compilación, sin
-despacho dinámico):
+El contrato se reduce a **un único primitivo** que ejecuta una sentencia
+parametrizada y devuelve un `SqlResult`. La base CRTP reenvía la API pública al
+método `run_impl` del concreto (resuelto en compilación, sin despacho dinámico):
 
 ```cpp
-// Modelos compartidos (User, Video, Comment) en oreshnek/platform/Models.h
 template <typename T>
-concept DatabaseBackend = requires(T b, const User& u, const std::string& s,
-                                   int limit, int offset, const std::string& cat) {
-    { b.create_user_impl(u) }            -> std::same_as<bool>;
-    { b.user_by_username_impl(s) }       -> std::same_as<User>;
-    { b.create_video_impl(std::declval<const Video&>()) } -> std::same_as<bool>;
-    { b.videos_impl(limit, offset, cat) }-> std::same_as<std::vector<Video>>;
-    { b.increment_views_impl(limit) }    -> std::same_as<bool>;
-    // ... se amplía con cada operación nueva
+concept DatabaseBackend = requires(T b, std::string_view sql, const SqlParams& p) {
+    { b.run_impl(sql, p) } -> std::same_as<SqlResult>;
 };
 
 template <typename Derived>
 class DatabaseBase {
 public:
-    bool createUser(const User& u)              { return self().create_user_impl(u); }
-    User getUserByUsername(const std::string& n){ return self().user_by_username_impl(n); }
-    bool createVideo(const Video& v)            { return self().create_video_impl(v); }
-    std::vector<Video> getVideos(int l, int o, const std::string& c)
-                                                { return self().videos_impl(l, o, c); }
-    bool incrementViews(int id)                 { return self().increment_views_impl(id); }
+    // query() y exec() son alias semánticos del mismo primitivo.
+    SqlResult query(std::string_view sql, const SqlParams& p = {}) { return self().run_impl(sql, p); }
+    SqlResult exec (std::string_view sql, const SqlParams& p = {}) { return self().run_impl(sql, p); }
 protected:
     Derived&       self()       { return static_cast<Derived&>(*this); }
     const Derived& self() const { return static_cast<const Derived&>(*this); }
@@ -59,20 +88,15 @@ protected:
 
 ```cpp
 class SqliteBackend : public DatabaseBase<SqliteBackend> {
-    friend class DatabaseBase<SqliteBackend>;
-    SqlitePool pool_;                       // el pool WAL actual (Fase 4)
-    bool create_user_impl(const User&);
-    User user_by_username_impl(const std::string&);
-    // ... DDL y SQL en dialecto SQLite (placeholders '?', AUTOINCREMENT)
+    SqlitePool pool_;                       // pool WAL
+public:
+    SqlResult run_impl(std::string_view sql, const SqlParams&);  // prepare/bind/step
 };
 
 class PgBackend : public DatabaseBase<PgBackend> {
-    friend class DatabaseBase<PgBackend>;
-    PgPool pool_;                           // pool de conexiones libpq (nuevo)
-    bool create_user_impl(const User&);
-    User user_by_username_impl(const std::string&);
-    // ... DDL y SQL en dialecto PostgreSQL (placeholders $1, SERIAL/IDENTITY,
-    //     RETURNING id)
+    PgPool pool_;                           // pool libpq
+public:
+    SqlResult run_impl(std::string_view sql, const SqlParams&);  // PQexecParams
 };
 
 static_assert(DatabaseBackend<SqliteBackend>);
@@ -81,68 +105,78 @@ static_assert(DatabaseBackend<PgBackend>);
 
 ### 3) Frontera con selección en runtime (sin virtual)
 
-`DatabaseManager` deja de ser un backend concreto y pasa a ser la **frontera**:
-mantiene un `std::variant` del backend elegido y despacha con `std::visit`
-(switch generado, sin vtables ni herencia dinámica).
+`DatabaseManager` es la **frontera**: mantiene un `std::variant` del backend
+elegido y despacha con `std::visit` (switch generado, sin vtables). Solo expone
+el gateway genérico:
 
 ```cpp
 class DatabaseManager {
-    std::variant<SqliteBackend, PgBackend> backend_;
+    std::variant<std::unique_ptr<SqliteBackend>, std::unique_ptr<PgBackend>> backend_;
 public:
-    explicit DatabaseManager(const ServerConfig& cfg); // construye la alternativa elegida
-
-    bool createUser(const User& u) {
-        return std::visit([&](auto& b){ return b.createUser(u); }, backend_);
-    }
-    User getUserByUsername(const std::string& n) {
-        return std::visit([&](auto& b){ return b.getUserByUsername(n); }, backend_);
-    }
-    // ... resto de operaciones, todas vía std::visit
+    explicit DatabaseManager(const ServerConfig& cfg);  // construye la alternativa elegida
+    SqlResult query(std::string_view sql, const SqlParams& p = {});
+    SqlResult exec (std::string_view sql, const SqlParams& p = {});
 };
 ```
 
-Añadir un backend futuro (p. ej. `MySqlBackend`) = crear el concreto que cumple el
-concept y añadirlo al `std::variant`. Ningún call-site cambia.
+(Los pools tienen mutex/condvar no movibles, por eso las alternativas viven tras
+`unique_ptr`, manteniendo el `std::variant` movible.) Añadir un backend futuro
+(p. ej. `MySqlBackend`) = crear el concreto que cumple el concept y añadirlo al
+`std::variant`. Ningún call-site cambia.
 
-> Alternativa considerada: parametrizar toda la app sobre el backend (CRTP puro,
-> selección en **compilación**, coste cero, sin `std::variant`). Se descarta como
-> opción por defecto porque impide elegir la base de datos por configuración. Queda
-> disponible si en algún despliegue se prefiere fijar el backend en compilación.
+## Portabilidad del SQL: placeholders `?`
+
+Las sentencias usan **placeholders posicionales `?`**, ligados por posición desde
+`SqlParams`. El backend PostgreSQL los traduce a la forma `$1, $2, ...` de libpq
+(respetando los `?` dentro de literales de cadena), de modo que el mismo SQL corre
+sin cambios en ambos backends. Lo que sí cambia entre dialectos es el **DDL** y
+algunas funciones; eso es responsabilidad de la aplicación.
+
+| Aspecto            | SQLite3                      | PostgreSQL                         |
+|--------------------|------------------------------|------------------------------------|
+| Placeholders (API) | `?`                          | `?` (traducido a `$n`)             |
+| Autoincremento     | `INTEGER PRIMARY KEY AUTOINCREMENT` | `SERIAL` / `GENERATED ... IDENTITY` |
+| Id tras INSERT     | `last_insert_id` del resultado | `INSERT ... RETURNING id`        |
+| Booleanos          | `INTEGER 0/1`                | `BOOLEAN` (`boolean()` los unifica) |
+| Timestamp          | `DATETIME DEFAULT CURRENT_TIMESTAMP` | `TIMESTAMPTZ DEFAULT now()` |
+
+## Uso (patrón de repositorio en la aplicación)
+
+```cpp
+Platform::DatabaseManager db(config);
+
+// La aplicación corre su propio DDL.
+db.exec("CREATE TABLE IF NOT EXISTS notes ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);");
+
+// Escritura parametrizada.
+auto ins = db.exec("INSERT INTO notes (title) VALUES (?);", {"hola"});
+long long id = ins.last_insert_id;
+
+// Lectura + mapeo a un modelo propio.
+auto r = db.query("SELECT id, title FROM notes WHERE id = ?;", {std::to_string(id)});
+if (r.ok && !r.empty()) {
+    long long got_id      = r.integer(0, 0);
+    std::string got_title = std::string(r.text(0, 1));
+}
+```
 
 ## Pool de conexiones PostgreSQL (`PgPool`)
 
-Análogo a `SqlitePool` (Fase 4): N conexiones `PGconn*` abiertas con una cadena de
-conexión, checkout/checkin con RAII sobre mutex + condvar.
+Análogo a `SqlitePool`: N conexiones `PGconn*` abiertas con una cadena de conexión,
+checkout/checkin con RAII sobre mutex + condvar.
 
 - Conexión: `PQconnectdb(conninfo)`; se valida `PQstatus(c) == CONNECTION_OK`.
 - **Reconexión**: al devolver una conexión caída (`CONNECTION_BAD`) se intenta
   `PQreset()`; si falla, se reabre.
-- **Consultas parametrizadas siempre** con `PQexecParams` / `PQexecPrepared`
-  (placeholders `$1, $2, ...`) — nunca concatenación de strings → anti SQL
-  injection.
-- Tipos: se transfieren como texto (formato 0) y se convierten en C++ (los modelos
-  ya son `std::string`/`int`); `INSERT ... RETURNING id` para recuperar ids.
-- Wrappers RAII propios para `PGconn*` y `PGresult*` (cierre con `PQfinish` /
-  `PQclear`), en línea con la preferencia de no usar `virtual`.
-
-## Esquema por dialecto
-
-Los modelos (`User`, `Video`, `Comment`) se comparten; el **DDL y el SQL son por
-backend**. Diferencias principales:
-
-| Aspecto            | SQLite3                      | PostgreSQL                         |
-|--------------------|------------------------------|------------------------------------|
-| Placeholders       | `?`                          | `$1, $2, ...`                      |
-| Autoincremento     | `INTEGER PRIMARY KEY AUTOINCREMENT` | `GENERATED ALWAYS AS IDENTITY` / `SERIAL` |
-| Id tras INSERT     | `sqlite3_last_insert_rowid`  | `INSERT ... RETURNING id`          |
-| Booleanos          | `INTEGER 0/1`                | `BOOLEAN`                          |
-| Timestamp          | `DATETIME DEFAULT CURRENT_TIMESTAMP` | `TIMESTAMPTZ DEFAULT now()` |
-
-Cada backend posee su propio `initialize_tables_impl()` con el DDL de su dialecto.
+- **Consultas parametrizadas siempre** con `PQexecParams` — nunca concatenación.
+- Tipos transferidos como texto (formato 0); el `SqlResult` los expone como texto
+  con accesores tipados.
+- Wrappers RAII propios para `PGconn*` y `PGresult*` (`PQfinish` / `PQclear`).
 
 ## Configuración
 
-`ServerConfig` gana una sección de base de datos (cargada por `Platform::Config`):
+`ServerConfig` tiene una sección de base de datos (cargada por `Platform::Config`):
 
 ```json
 "db": {
@@ -156,7 +190,7 @@ Cada backend posee su propio `initialize_tables_impl()` con el DDL de su dialect
 }
 ```
 
-**Secretos fuera del fichero** (igual que el JWT en Fase 4):
+**Secretos fuera del fichero**:
 
 - `ORESHNEK_PG_PASSWORD` — contraseña de PostgreSQL.
 - `ORESHNEK_DATABASE_URL` — si está presente, una URL `postgresql://...` completa
@@ -164,39 +198,17 @@ Cada backend posee su propio `initialize_tables_impl()` con el DDL de su dialect
 
 ## Seguridad
 
-- Consultas **siempre** parametrizadas (`$n`) — sin concatenar entrada del usuario.
+- Consultas **siempre** parametrizadas — sin concatenar entrada del usuario.
 - `sslmode` configurable (`prefer`/`require`/`verify-full`) para cifrado en
   tránsito; recomendado `require`+ en producción.
 - Contraseña por entorno/URL, nunca en el repositorio.
 - Principio de mínimo privilegio para el rol de la aplicación (documentado, no
   forzado por el código).
 
-## Plan de implementación (commits previstos)
-
-Cada commit compila y mantiene la suite verde (incl. ASan/UBSan + TSan):
-
-1. **Modelos + contrato**: extraer `User`/`Video`/`Comment` a `Models.h`; añadir el
-   `concept DatabaseBackend` y la base CRTP `DatabaseBase`.
-2. **SqliteBackend**: mover la lógica SQLite actual de `DatabaseManager` a
-   `SqliteBackend` (reutiliza `SqlitePool`); `DatabaseManager` pasa a `std::variant`
-   con solo la alternativa SQLite. `db_test` sigue verde sin cambios de
-   comportamiento.
-3. **PgPool**: pool de conexiones `libpq` con RAII y reconexión; `find_package(PostgreSQL)`
-   en CMake.
-4. **PgBackend**: implementación de las operaciones con `PQexecParams` y DDL
-   PostgreSQL; añadir al `std::variant`; selección por `db.backend`.
-5. **Configuración**: sección `db` en `ServerConfig`/`Config` + overrides por
-   entorno; `config/oreshnek.example.json` actualizado.
-6. **Tests**: `pg_test` (mismas aserciones que `db_test`) que se **salta** si no hay
-   PostgreSQL disponible (`ORESHNEK_PG_TEST_DSN` sin definir), para no romper CI sin
-   servidor. Opcional: servicio Postgres en el contenedor de CI.
-7. **Docs**: actualizar `ARCHITECTURE.md` y `ROADMAP.md` (este documento ya fija el
-   diseño).
-
 ## Extensibilidad futura
 
 Cada nueva base de datos (Oracle, MySQL, MongoDB, ClickHouse, DB2, ...) se añade
-como un nuevo concreto que satisface el `concept`, con su propio pool/cliente y
-dialecto, y se incorpora al `std::variant`. Para almacenes no-SQL (MongoDB) el
-concept puede dividirse en sub-contratos (p. ej. operaciones documentales) sin
-introducir `virtual`.
+como un nuevo concreto que satisface el `concept` (implementa `run_impl`), con su
+propio pool/cliente, y se incorpora al `std::variant`. Para almacenes no-SQL el
+primitivo puede generalizarse o complementarse con otro contrato sin introducir
+`virtual`.
