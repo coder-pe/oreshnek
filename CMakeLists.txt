@@ -62,6 +62,24 @@ if(PostgreSQL_FOUND)
     message(STATUS "Found PostgreSQL (libpq): ${PostgreSQL_VERSION_STRING}")
 endif()
 
+# Compression: gzip via zlib (required), Brotli optional (auto-detected).
+find_package(ZLIB REQUIRED)
+message(STATUS "Found zlib: ${ZLIB_VERSION_STRING}")
+
+find_path(BROTLI_INCLUDE_DIR brotli/encode.h
+          HINTS /opt/homebrew/opt/brotli/include /usr/local/opt/brotli/include)
+find_library(BROTLI_ENC NAMES brotlienc
+             HINTS /opt/homebrew/opt/brotli/lib /usr/local/opt/brotli/lib)
+find_library(BROTLI_COMMON NAMES brotlicommon
+             HINTS /opt/homebrew/opt/brotli/lib /usr/local/opt/brotli/lib)
+if(BROTLI_INCLUDE_DIR AND BROTLI_ENC AND BROTLI_COMMON)
+    set(ORESHNEK_HAVE_BROTLI ON)
+    message(STATUS "Found Brotli: ${BROTLI_ENC} (Content-Encoding: br enabled)")
+else()
+    set(ORESHNEK_HAVE_BROTLI OFF)
+    message(STATUS "Brotli not found — only gzip available (install: brew install brotli)")
+endif()
+
 # nlohmann/json: prefer the vendored single-header (in nlohmann_json/, which is
 # git-ignored), fall back to a system/CMake package. Marked SYSTEM so the
 # header's own code does not trip our -Wall -Wextra -pedantic flags.
@@ -89,9 +107,15 @@ target_link_libraries(oreshnek PUBLIC
     OpenSSL::Crypto
     SQLite::SQLite3
     PostgreSQL::PostgreSQL
+    ZLIB::ZLIB
     oreshnek_json
     oreshnek_sanitizers
 )
+if(ORESHNEK_HAVE_BROTLI)
+    target_include_directories(oreshnek SYSTEM PRIVATE ${BROTLI_INCLUDE_DIR})
+    target_link_libraries(oreshnek PUBLIC ${BROTLI_ENC} ${BROTLI_COMMON})
+    target_compile_definitions(oreshnek PRIVATE ORESHNEK_HAVE_BROTLI)
+endif()
 target_compile_options(oreshnek PRIVATE -Wall -Wextra -pedantic)
 
 # --- Application -------------------------------------------------------------
@@ -160,6 +184,12 @@ if(ORESHNEK_BUILD_TESTS)
     target_compile_options(tls_test PRIVATE -Wall -Wextra)
     add_test(NAME tls_test COMMAND tls_test)
     set_tests_properties(tls_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
+    add_executable(compression_test tests/compression_test.cpp)
+    target_link_libraries(compression_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(compression_test PRIVATE -Wall -Wextra)
+    add_test(NAME compression_test COMMAND compression_test)
+    set_tests_properties(compression_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 
     add_executable(rate_limit_test tests/rate_limit_test.cpp)
     target_link_libraries(rate_limit_test PRIVATE oreshnek oreshnek_sanitizers)

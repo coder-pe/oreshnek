@@ -23,7 +23,8 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 *   **Multihilo:** Utiliza un pool de hilos para procesar las peticiones de forma concurrente y no bloqueante.
 *   **Enrutador (Router):** Un sistema de enrutamiento simple pero potente para mapear rutas y métodos HTTP a funciones manejadoras (handlers).
 *   **Manejo de HTTP/1.1:** Peticiones (`HttpRequest`) y respuestas (`HttpResponse`), keep-alive, pipelining, `Transfer-Encoding: chunked`, `Expect: 100-continue` y `HEAD`.
-*   **Streaming de ficheros:** Servido zero-copy con `sendfile` y **Range requests** (`206 Partial Content`) para vídeo y descargas reanudables.
+*   **Streaming de ficheros:** Servido zero-copy con `sendfile`, **Range requests** (`206 Partial Content`) y **caché condicional** (`ETag`/`Last-Modified` → `304`) para vídeo y descargas reanudables.
+*   **Compresión:** `gzip` (zlib) y `brotli` opcional, negociados por `Accept-Encoding`, para texto/JSON/manifiestos (nunca ficheros/video).
 *   **Procesamiento de JSON:** Usa [nlohmann/json](https://github.com/nlohmann/json) como motor JSON.
 *   **Subidas multipart:** Parser `multipart/form-data` integrado (`Http::Multipart`).
 *   **TLS/HTTPS:** Opcional sobre OpenSSL con handshake no bloqueante.
@@ -39,8 +40,9 @@ Para compilar y ejecutar un proyecto con Oreshnek, necesitarás:
 
 *   Un compilador compatible con C++20 (GCC 10+, Clang 12+).
 *   CMake (versión 3.16 o superior).
-*   OpenSSL (para funcionalidades criptográficas).
-*   SQLite3 (para la gestión de bases de datos).
+*   OpenSSL (criptografía y TLS).
+*   SQLite3 y `libpq` (PostgreSQL) para los backends de base de datos.
+*   zlib (gzip); brotli **opcional** (Content-Encoding: br, autodetectado).
 *   nlohmann/json (vendorizado en `nlohmann_json/`, o un paquete del sistema).
 
 ## Cómo Empezar

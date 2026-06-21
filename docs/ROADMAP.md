@@ -116,7 +116,7 @@ backend ligero (dev/tests/embebido). Diseño detallado en
 - ✅ Extensible a futuro (Oracle, MySQL, MongoDB, ClickHouse, DB2, ...) añadiendo
   concretos al `std::variant`.
 
-## Fase 6 — TLS y rendimiento ✅ (queda opcional gzip/HTTP2)
+## Fase 6 — TLS y rendimiento ✅ (queda opcional HTTP/2)
 
 - ✅ **TLS con OpenSSL** (handshake no bloqueante integrado en el event loop):
   `Net::TlsContext` carga cert/key; `SSL_accept`/`SSL_read`/`SSL_write` con
@@ -135,4 +135,20 @@ backend ligero (dev/tests/embebido). Diseño detallado en
   vuelo (`handler_timeout_sec`); como el worker no se puede cancelar con
   seguridad, su resultado tardío se descarta. De paso se corrigió el
   write-timeout (antes inalcanzable). Test en `lifecycle_test`.
-- ⬜ (Opcional) compresión gzip/brotli, HTTP/2 (`nghttp2`).
+- ✅ **Compresión de respuestas** gzip (zlib) + brotli opcional, negociada por
+  `Accept-Encoding`; solo cuerpos de texto compresibles (JSON/HTML/manifiestos),
+  nunca ficheros/video. `compression.*` por config. Test `compression_test`.
+- ⬜ (Opcional) HTTP/2 (`nghttp2`).
+
+## Fase 7 — Tiempo real y streaming ⬜ (siguiente)
+
+Orientada al caso de uso de video en vivo (ver memoria de objetivos). El framework
+cubre el tier de **API + origen HLS**; ingesta/transcodificación/WebRTC/CDN se
+delegan a infraestructura especializada.
+
+- ⬜ **WebSocket** (RFC 6455) — chat/gifts/presencia/señalización; clave para la
+  capa interactiva tipo TikTok/YouTube Live.
+- ⬜ **Streaming de respuesta sin buffer completo** — generar el cuerpo por trozos
+  (chunked) desde el handler y poder retener una petición (long-poll); requisito
+  de LL-HLS y arregla el límite actual de cuerpo buffeado entero (1 MiB).
+- ⬜ Benchmarks + fuzzing del parser (validación con terceros tipo TechEmpower).

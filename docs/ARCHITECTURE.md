@@ -200,6 +200,17 @@ con `pread`+`SSL_write`. El cierre hace `SSL_shutdown`/`SSL_free` (el `fd` lo ci
 > Es un único puerto TLS (HTTPS-only cuando se activa); HTTP+HTTPS simultáneos en
 > puertos distintos queda como trabajo futuro.
 
+## Compresión de respuestas
+
+Con `compression.enabled`, el worker comprime el cuerpo **string** de la respuesta
+(antes de la supresión de cuerpo de HEAD) si: el `Content-Type` es compresible
+(text/\*, JSON, JS, XML, manifiestos HLS/DASH, SVG), supera `min_bytes`, y el
+cliente lo acepta vía `Accept-Encoding` (se prefiere **brotli** sobre **gzip**;
+se respeta `q=0`). Fija `Content-Encoding`, `Vary: Accept-Encoding` y recalcula
+`Content-Length`. **Nunca** comprime respuestas de fichero, de modo que `sendfile`
+y los bytes de video quedan intactos. gzip usa **zlib** (siempre disponible);
+brotli (`libbrotli`) es opcional y se autodetecta en compilación.
+
 ## Persistencia (abstracción de backend)
 
 `DatabaseManager` es una **frontera** sobre los backends concretos, con
