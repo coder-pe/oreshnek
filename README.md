@@ -29,7 +29,7 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 *   **Subidas multipart:** Parser `multipart/form-data` integrado (`Http::Multipart`).
 *   **TLS/HTTPS:** Opcional sobre OpenSSL con handshake no bloqueante.
 *   **Middleware:** Cadena encadenable con short-circuit (CORS, logging, JWT, propios).
-*   **Bases de datos:** Abstracción sin `virtual` (CRTP) con backends **SQLite** y **PostgreSQL** (libpq), seleccionables por configuración.
+*   **Bases de datos:** Gateway SQL **genérico y agnóstico del dominio** (`query`/`exec` parametrizado, filas genéricas); el framework no impone modelos. Abstracción sin `virtual` (CRTP) con backends **SQLite** y **PostgreSQL** (libpq), seleccionables por configuración.
 *   **Operación:** Configuración externa (JSON + entorno), logging estructurado con rotación, timeouts, apagado graceful, **rate limiting** por IP y **métricas Prometheus** (`/metrics`).
 *   **Seguridad:** PBKDF2-HMAC-SHA256, JWT HS256 (tiempo constante), límites anti-DoS.
 *   **Extensible:** Arquitectura modular; ver [puntos de personalización](examples/README.md).

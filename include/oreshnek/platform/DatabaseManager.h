@@ -3,31 +3,33 @@
 #define ORESHNEK_PLATFORM_DATABASE_MANAGER_H
 
 #include "oreshnek/platform/Config.h"        // ServerConfig
-#include "oreshnek/platform/Models.h"
 #include "oreshnek/platform/PgBackend.h"
+#include "oreshnek/platform/SqlResult.h"
 #include "oreshnek/platform/SqliteBackend.h"
 
 #include <memory>
-#include <string>
+#include <string_view>
 #include <variant>
-#include <vector>
 
 namespace Oreshnek {
 namespace Platform {
 
-// Boundary over the concrete database backends. The active backend is chosen at
-// runtime from the configuration and stored in a std::variant; every operation
-// is dispatched with std::visit (no virtual). Add a backend by adding its type
-// to the Backend variant and a branch in make_backend().
+// Domain-agnostic boundary over the concrete database backends. The active
+// backend is chosen at runtime from the configuration and stored in a
+// std::variant; every call is dispatched with std::visit (no virtual).
+//
+// The manager exposes only the generic query()/exec() gateway — it deliberately
+// knows nothing about application models. Build your own repository on top:
+// run DDL with exec(), read rows with query(), and map SqlResult into your
+// structs. Add a backend by extending the Backend variant and make_backend().
 class DatabaseManager {
 public:
     explicit DatabaseManager(const ServerConfig& config);
 
-    bool createUser(const User& user);
-    User getUserByUsername(const std::string& username);
-    bool createVideo(const Video& video);
-    std::vector<Video> getVideos(int limit = 20, int offset = 0, const std::string& category = "");
-    bool incrementViews(int video_id);
+    // Run any statement against the configured backend. Placeholders are `?`,
+    // bound positionally from `params` (std::nullopt => SQL NULL).
+    SqlResult query(std::string_view sql, const SqlParams& params = {});
+    SqlResult exec(std::string_view sql, const SqlParams& params = {});
 
 private:
     // The pools own a mutex/condvar (non-movable), so the alternatives live

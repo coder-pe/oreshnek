@@ -13,9 +13,10 @@ cmake -S . -B build && cmake --build build
 |---------|-------------|-----------------------------|
 | [`01_hello_json`](01_hello_json.cpp) | Servicio JSON mínimo | Rutas, parámetros de ruta/query, cuerpo JSON, respuestas JSON/texto |
 | [`02_middleware`](02_middleware.cpp) | Lógica transversal | Cadena de middleware (orden, short-circuit), built-ins (CORS/logger/JWT) y middleware propio |
-| [`03_rest_crud_db`](03_rest_crud_db.cpp) | API REST con BD | Selección de backend por config (SQLite↔PostgreSQL sin tocar handlers), hashing de password, login JWT |
+| [`03_rest_crud_db`](03_rest_crud_db.cpp) | API REST con BD | Gateway SQL genérico (`query`/`exec` parametrizado): modelo y DDL **propios de la app**, mapeo de filas, backend por config (SQLite↔PostgreSQL), hashing de password, login JWT |
 | [`04_static_files`](04_static_files.cpp) | Servir ficheros | `HttpResponse::file()` (sendfile/Range/HEAD automáticos), resolución segura anti directory-traversal |
 | [`05_production`](05_production.cpp) | Despliegue real | `Config::load`, logging, timeouts + shutdown graceful, TLS, rate limiting, `/metrics` |
+| [`06_video_platform`](06_video_platform.cpp) | App de dominio completa | Construir un dominio propio (usuarios + vídeos: modelos, esquema y repositorio) **sobre** el gateway genérico — demuestra que el framework es de propósito general |
 
 ## Puntos de personalización del framework
 
@@ -27,10 +28,14 @@ cmake -S . -B build && cmake --build build
   [`oreshnek/server/Middleware.h`](../include/oreshnek/server/Middleware.h):
   `cors()`, `request_logger()`, `require_jwt(secret, prefijos)`. Un middleware es
   cualquier `bool(const HttpRequest&, HttpResponse&)`.
-- **Backends de base de datos** — abstracción sin `virtual` (CRTP + `concept` +
-  `std::variant`). Se elige por `db.backend` en la config; añadir uno nuevo
-  (Oracle, MySQL, ...) = crear un concreto que cumpla el `concept` y sumarlo al
-  `variant`. Ver [`docs/DATABASE.md`](../docs/DATABASE.md).
+- **Base de datos** — gateway SQL **genérico y agnóstico del dominio**:
+  `db.query(sql, params)` / `db.exec(sql, params)` con consultas parametrizadas
+  (anti-inyección) y filas genéricas (`SqlResult`). El framework no impone modelos;
+  la app define su esquema y mapea las filas a sus structs (ver `06_video_platform`).
+  Abstracción sin `virtual` (CRTP + `concept` + `std::variant`); el backend se elige
+  por `db.backend` en la config; añadir uno nuevo (Oracle, MySQL, ...) = crear un
+  concreto que cumpla el `concept` y sumarlo al `variant`. Ver
+  [`docs/DATABASE.md`](../docs/DATABASE.md).
 - **Configuración** — `Platform::Config::load(path)`: defaults → fichero JSON →
   variables de entorno (secretos fuera del repo). Todas las claves en
   [`config/oreshnek.example.json`](../config/oreshnek.example.json).
