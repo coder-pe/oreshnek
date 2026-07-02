@@ -153,8 +153,13 @@ O todo de una vez con el gate de análisis (sanitizers + estático si está disp
 tools/analyze.sh
 ```
 
-Estado actual: **TSan 0 races, ASan/UBSan 0 errores, `ctest` verde (10 targets).**
+Estado actual: **TSan 0 races, ASan/UBSan 0 errores, `ctest` verde (12 targets).**
 Ver [`docs/ANALYSIS.md`](docs/ANALYSIS.md) para construir apps optimizadas y seguras.
+
+El `HttpParser` se fuzzea con **libFuzzer + ASan/UBSan** (target opcional
+`fuzz_http_parser`, `-DORESHNEK_FUZZ=ON`); el corpus y los reproductores de
+crashes se re-ejecutan de forma determinista en `ctest` (`fuzz_replay_test`).
+Detalles en [`tests/fuzz/README.md`](tests/fuzz/README.md).
 
 ## Modelo de hilos
 
@@ -183,7 +188,8 @@ El framework está organizado en los siguientes módulos principales:
 *   `/src/`: Implementaciones de los ficheros de cabecera correspondientes.
 *   `/examples/`: [Programas de referencia](examples/README.md) por caso de uso.
 *   `/tools/`: `analyze.sh` (gate de sanitizers + análisis estático).
-*   `/tests/`: Pruebas de integración del framework (10 targets ctest).
+*   `/tests/`: Pruebas de integración del framework (12 targets ctest) y
+    fuzzing del parser en [`tests/fuzz/`](tests/fuzz/README.md).
 *   `/docs/`: [Arquitectura](docs/ARCHITECTURE.md), [seguridad](docs/SECURITY.md),
     [persistencia](docs/DATABASE.md), [análisis](docs/ANALYSIS.md),
     [comparativa](docs/COMPARISON_DROGON.md) y [roadmap](docs/ROADMAP.md).
