@@ -50,10 +50,16 @@ std::string Metrics::render() const {
             rate_limited_total.load(std::memory_order_relaxed));
     counter("oreshnek_handler_timeouts_total", "Requests aborted by the handler timeout.",
             handler_timeouts_total.load(std::memory_order_relaxed));
+    counter("oreshnek_load_shed_total", "Requests rejected with 503 due to the in-flight handler cap.",
+            load_shed_total.load(std::memory_order_relaxed));
 
     o << "# HELP oreshnek_connections_active Currently open connections.\n"
       << "# TYPE oreshnek_connections_active gauge\n"
       << "oreshnek_connections_active " << connections_active.load(std::memory_order_relaxed) << '\n';
+
+    o << "# HELP oreshnek_workers_in_flight Handlers dispatched to a worker and not yet completed.\n"
+      << "# TYPE oreshnek_workers_in_flight gauge\n"
+      << "oreshnek_workers_in_flight " << workers_in_flight.load(std::memory_order_relaxed) << '\n';
 
     // Histogram: cumulative buckets, then sum and count.
     o << "# HELP oreshnek_request_duration_seconds Request processing duration.\n"

@@ -17,6 +17,7 @@
   "idle_timeout_sec": 60,
   "shutdown_grace_sec": 10,
   "handler_timeout_sec": 30,
+  "max_concurrent_handlers": 0,
 
   "log_level": "info",
   "log_file": "",

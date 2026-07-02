@@ -163,12 +163,56 @@ void test_handler_timeout(int port) {
 
     check(resp.find("504") != std::string::npos, "handler-timeout: slow handler got 504");
 }
+
+// --- Test 4: load shedding returns 503 when the in-flight cap is reached -----
+void test_load_shedding(int port) {
+    Server::Server server(2);
+    // read, write, idle, grace, handler=0 (disabled), max_concurrent_handlers=1.
+    server.configure(Server::Server::Settings{30, 5, 30, 5, 0, 1});
+    server.get("/slow", [](const Http::HttpRequest&, Http::HttpResponse& res) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        res.status(Http::HttpStatus::OK).text("done");
+    });
+
+    if (!server.listen(kHost, port)) {
+        check(false, "load-shed: server failed to listen");
+        return;
+    }
+    std::thread loop([&server] { server.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Connection A occupies the single in-flight slot with a slow handler.
+    int fd_a = connect_to(port);
+    check(fd_a >= 0, "load-shed: first connection");
+    send_all(fd_a, "GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    // Give the event loop time to dispatch A to a worker (gauge -> 1).
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Connection B arrives while A is still running: it must be shed with 503.
+    int fd_b = connect_to(port);
+    check(fd_b >= 0, "load-shed: second connection");
+    send_all(fd_b, "GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+
+    std::string resp_b = read_until_eof(fd_b, 2000);
+    std::string resp_a = read_until_eof(fd_a, 3000);
+    ::close(fd_b);
+    ::close(fd_a);
+    server.request_stop();
+    loop.join();
+
+    check(resp_b.find("503") != std::string::npos, "load-shed: capped request got 503");
+    check(resp_b.find("Retry-After") != std::string::npos, "load-shed: 503 carries Retry-After");
+    check(resp_a.find("200") != std::string::npos, "load-shed: in-flight request still got 200");
+    check(server.metrics().load_shed_total.load() >= 1, "load-shed: counter incremented");
+    check(server.metrics().workers_in_flight.load() == 0, "load-shed: in-flight gauge drains to 0");
+}
 }  // namespace
 
 int main() {
     test_graceful_drain(18091);
     test_read_timeout(18092);
     test_handler_timeout(18096);
+    test_load_shedding(18097);
 
     if (g_failures == 0) {
         std::cout << "[OK] all lifecycle tests passed" << std::endl;

@@ -92,7 +92,8 @@ int main(int argc, char** argv) {
         Oreshnek::Server::Server server(config.thread_pool_size);
         server.configure(Oreshnek::Server::Server::Settings{
             config.read_timeout_sec, config.write_timeout_sec, config.idle_timeout_sec,
-            config.shutdown_grace_sec, config.handler_timeout_sec});
+            config.shutdown_grace_sec, config.handler_timeout_sec,
+            config.max_concurrent_handlers});
 
         if (config.tls.enabled) {
             if (config.tls.cert_file.empty() || config.tls.key_file.empty()) {
