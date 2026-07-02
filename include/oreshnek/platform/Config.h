@@ -84,6 +84,9 @@ struct ServerConfig {
     int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
     int shutdown_grace_sec = 10;   // Drain budget for graceful shutdown.
     int handler_timeout_sec = 30;  // Handler exceeds this -> 504 and close.
+    // Cap on handlers in flight; excess requests get 503 (load shedding).
+    // 0 = unbounded. A sensible production value is a few × thread_pool_size.
+    int max_concurrent_handlers = 0;
 
     // Logging.
     std::string log_level = "info";       // trace|debug|info|warn|error|off

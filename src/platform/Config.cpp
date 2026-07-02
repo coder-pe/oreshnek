@@ -64,6 +64,7 @@ ServerConfig Config::load(const std::string& path) {
             assign_if_present(config, "idle_timeout_sec", cfg.idle_timeout_sec);
             assign_if_present(config, "shutdown_grace_sec", cfg.shutdown_grace_sec);
             assign_if_present(config, "handler_timeout_sec", cfg.handler_timeout_sec);
+            assign_if_present(config, "max_concurrent_handlers", cfg.max_concurrent_handlers);
 
             assign_if_present(config, "log_level", cfg.log_level);
             assign_if_present(config, "log_file", cfg.log_file);

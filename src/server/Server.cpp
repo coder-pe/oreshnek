@@ -754,6 +754,28 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
             return;
         }
 
+        // Load shedding: if the configured number of handlers is already in
+        // flight, reject immediately with 503 instead of queuing another task.
+        // A hung handler holds a worker forever, so without this the pool queue
+        // would grow unbounded and the server would stall silently; failing fast
+        // keeps it responsive and lets a load balancer route away.
+        if (settings_.max_concurrent_handlers > 0 &&
+            metrics_.workers_in_flight.load(std::memory_order_relaxed) >=
+                settings_.max_concurrent_handlers) {
+            conn->consume(consumed);
+            conn->processing_ = true;
+            metrics_.load_shed_total.fetch_add(1, std::memory_order_relaxed);
+            metrics_.record_status(503);
+            Http::HttpResponse res;
+            nlohmann::json err;
+            err["error"] = "Service Unavailable";
+            res.status(Http::HttpStatus::SERVICE_UNAVAILABLE).json(err);
+            res.header("Retry-After", "1");
+            conn->set_response_content(res);
+            rearm(fd, /*read=*/false);
+            return;
+        }
+
         // Take an owning copy of the request so it can safely outlive the
         // socket buffer and be handed to a worker thread.
         auto request = std::make_shared<Http::HttpRequest>(std::move(conn->current_request_));
@@ -764,7 +786,19 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
         const auto t_start = std::chrono::steady_clock::now();
         conn->processing_since_ = t_start;
 
+        // Count this handler as in flight before it is queued; the worker's guard
+        // (below) decrements it on completion. A hung handler never decrements,
+        // which is intentional — the gauge then reflects the wedged worker.
+        metrics_.workers_in_flight.fetch_add(1, std::memory_order_relaxed);
         thread_pool_->enqueue([this, fd, conn, request, t_start]() {
+            // Ensure the in-flight gauge is decremented however the handler exits
+            // (normal return or exception); a truly stuck handler never reaches
+            // this scope exit, so it stays counted, as intended.
+            struct InFlightGuard {
+                Metrics& m;
+                ~InFlightGuard() { m.workers_in_flight.fetch_sub(1, std::memory_order_relaxed); }
+            } in_flight_guard{metrics_};
+
             Http::HttpResponse res;
             RouteHandler handler;
             std::unordered_map<std::string_view, std::string_view> path_params;

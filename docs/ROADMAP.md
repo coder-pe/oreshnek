@@ -133,8 +133,16 @@ backend ligero (dev/tests/embebido). Diseño detallado en
   `metrics_test`.
 - ✅ **Timeout de handler** (`504`): el event loop fija un deadline al worker en
   vuelo (`handler_timeout_sec`); como el worker no se puede cancelar con
-  seguridad, su resultado tardío se descarta. De paso se corrigió el
-  write-timeout (antes inalcanzable). Test en `lifecycle_test`.
+  seguridad, su resultado tardío se descarta (liveness guard por identidad de
+  `shared_ptr` en `process_completions`). De paso se corrigió el write-timeout
+  (antes inalcanzable). Test en `lifecycle_test`.
+- ✅ **Degradación con gracia bajo handlers colgados**: como un handler atascado
+  retiene un worker indefinidamente, se añadió (a) un *gauge* `workers_in_flight`
+  y contador `load_shed_total` en `/metrics` para hacer visible la saturación, y
+  (b) **load shedding** por `max_concurrent_handlers`: al alcanzar el tope de
+  handlers en vuelo el event loop responde `503` (con `Retry-After`) sin encolar,
+  acotando el backlog del pool y evitando el estancamiento silencioso. `0`
+  desactiva el tope. Test de shedding en `lifecycle_test` (verde en normal/TSan).
 - ✅ **Compresión de respuestas** gzip (zlib) + brotli opcional, negociada por
   `Accept-Encoding`; solo cuerpos de texto compresibles (JSON/HTML/manifiestos),
   nunca ficheros/video. `compression.*` por config. Test `compression_test`.

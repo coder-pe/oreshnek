@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
     // 3) Timeouts + graceful-shutdown grace period.
     server.configure(Server::Server::Settings{
         cfg.read_timeout_sec, cfg.write_timeout_sec, cfg.idle_timeout_sec,
-        cfg.shutdown_grace_sec, cfg.handler_timeout_sec});
+        cfg.shutdown_grace_sec, cfg.handler_timeout_sec, cfg.max_concurrent_handlers});
 
     // 4) Optional HTTPS (fails fast on a bad cert/key).
     if (cfg.tls.enabled && !cfg.tls.cert_file.empty() && !cfg.tls.key_file.empty()) {

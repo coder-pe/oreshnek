@@ -107,6 +107,12 @@ public:
         int idle_timeout_sec = 60;     // Idle keep-alive connection -> close.
         int shutdown_grace_sec = 10;   // Drain budget for graceful shutdown.
         int handler_timeout_sec = 30;  // Worker/handler deadline -> 504.
+        // Maximum handlers dispatched to workers concurrently. When this many are
+        // already in flight, further requests are shed immediately with 503
+        // (Retry-After) from the event loop instead of being queued. This bounds
+        // the thread-pool backlog and keeps the server responsive when handlers
+        // hang (which cannot be cancelled). 0 disables the cap (unbounded queue).
+        int max_concurrent_handlers = 0;
     };
 
     Server(size_t worker_threads = std::thread::hardware_concurrency());

@@ -30,6 +30,15 @@ public:
     std::atomic<int64_t>  connections_active{0};
     std::atomic<uint64_t> rate_limited_total{0};
     std::atomic<uint64_t> handler_timeouts_total{0};
+    // Requests rejected with 503 because the in-flight handler cap was reached
+    // (load shedding). A high rate here signals workers stuck in slow/hung
+    // handlers — see workers_in_flight below.
+    std::atomic<uint64_t> load_shed_total{0};
+    // Handlers currently dispatched to a worker and not yet completed (gauge).
+    // Because a hung handler cannot be cancelled, it keeps this elevated for as
+    // long as it runs: a value pinned at the pool/cap size is the primary signal
+    // that handlers are wedged and the process may need recycling.
+    std::atomic<int64_t>  workers_in_flight{0};
 
     // Record a response by its numeric status code (buckets it into 2xx..5xx).
     void record_status(int code);
