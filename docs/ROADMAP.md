@@ -159,4 +159,11 @@ delegan a infraestructura especializada.
 - ⬜ **Streaming de respuesta sin buffer completo** — generar el cuerpo por trozos
   (chunked) desde el handler y poder retener una petición (long-poll); requisito
   de LL-HLS y arregla el límite actual de cuerpo buffeado entero (1 MiB).
-- ⬜ Benchmarks + fuzzing del parser (validación con terceros tipo TechEmpower).
+- 🔄 **Fuzzing del parser** (libFuzzer + ASan/UBSan): target `fuzz_http_parser`
+  con arnés de invariantes (dos modos: una-pasada e incremental estilo
+  `Connection::parse_next`), corpus semilla y replay determinista
+  `fuzz_replay_test` en `ctest` (protege regresiones sin libFuzzer, p.ej. Apple
+  clang). Ver [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md) y
+  [`../tests/fuzz/README.md`](../tests/fuzz/README.md).
+- ⬜ Benchmarks / validación de carga (wrk) — línea base reproducible + soak.
+- ⬜ Comparación con terceros tipo TechEmpower (fase posterior).

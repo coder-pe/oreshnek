@@ -15,9 +15,13 @@ option(ORESHNEK_ASAN  "Build with AddressSanitizer + UndefinedBehaviorSanitizer"
 option(ORESHNEK_TSAN  "Build with ThreadSanitizer" OFF)
 option(ORESHNEK_BUILD_TESTS "Build the test suite" ON)
 option(ORESHNEK_BUILD_EXAMPLES "Build the example programs (examples/)" ON)
+option(ORESHNEK_FUZZ "Build libFuzzer fuzz targets (needs a libFuzzer-capable clang)" OFF)
 
 if(ORESHNEK_ASAN AND ORESHNEK_TSAN)
     message(FATAL_ERROR "ORESHNEK_ASAN and ORESHNEK_TSAN are mutually exclusive.")
+endif()
+if(ORESHNEK_FUZZ AND ORESHNEK_TSAN)
+    message(FATAL_ERROR "ORESHNEK_FUZZ and ORESHNEK_TSAN are mutually exclusive.")
 endif()
 
 # Sanitizer flags are applied to every target so the runtime is consistent.
@@ -118,6 +122,16 @@ if(ORESHNEK_HAVE_BROTLI)
 endif()
 target_compile_options(oreshnek PRIVATE -Wall -Wextra -pedantic)
 
+# When fuzzing, instrument the whole library with coverage + ASan/UBSan so the
+# fuzz target (which provides its own main via -fsanitize=fuzzer) gets edge
+# coverage and memory checking through the parser and its dependencies.
+if(ORESHNEK_FUZZ)
+    message(STATUS "Fuzzing: libFuzzer coverage + ASan/UBSan on the oreshnek library")
+    target_compile_options(oreshnek PUBLIC
+        -fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer -g -O1)
+    target_link_options(oreshnek PUBLIC -fsanitize=address,undefined)
+endif()
+
 # --- Application -------------------------------------------------------------
 add_executable(oreshnek_server src/main.cpp)
 target_link_libraries(oreshnek_server PRIVATE oreshnek oreshnek_sanitizers)
@@ -202,4 +216,28 @@ if(ORESHNEK_BUILD_TESTS)
     target_compile_options(metrics_test PRIVATE -Wall -Wextra)
     add_test(NAME metrics_test COMMAND metrics_test)
     set_tests_properties(metrics_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
+    # Deterministic replay of the fuzz corpus + saved crash reproducers. Uses the
+    # same fuzz body as the libFuzzer target but no fuzzer runtime, so it runs on
+    # any toolchain (incl. Apple clang) and guards against regressions in ctest.
+    add_executable(fuzz_replay_test tests/fuzz/fuzz_replay.cpp)
+    target_link_libraries(fuzz_replay_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(fuzz_replay_test PRIVATE -Wall -Wextra)
+    target_compile_definitions(fuzz_replay_test PRIVATE
+        ORESHNEK_FUZZ_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fuzz")
+    add_test(NAME fuzz_replay_test COMMAND fuzz_replay_test)
+    set_tests_properties(fuzz_replay_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+endif()
+
+# --- Fuzzing (libFuzzer) -----------------------------------------------------
+# Requires a libFuzzer-capable clang. On macOS, Apple clang has no fuzzer
+# runtime; configure with Homebrew LLVM, e.g.:
+#   cmake -B build-fuzz -DORESHNEK_FUZZ=ON \
+#     -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
+if(ORESHNEK_FUZZ)
+    add_executable(fuzz_http_parser tests/fuzz/fuzz_http_parser.cpp)
+    target_link_libraries(fuzz_http_parser PRIVATE oreshnek)
+    target_compile_options(fuzz_http_parser PRIVATE
+        -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer -g -O1)
+    target_link_options(fuzz_http_parser PRIVATE -fsanitize=fuzzer,address,undefined)
 endif()
