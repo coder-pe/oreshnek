@@ -2,7 +2,15 @@
 cmake_minimum_required(VERSION 3.16)
 project(OreshnekServer CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+# C++20 is preferred (enables real concepts for the database backend contract),
+# but the framework also builds under C++17 for toolchains that lack a C++20
+# compiler; pass -DORESHNEK_CXX_STANDARD=17 to target those.
+set(ORESHNEK_CXX_STANDARD 20 CACHE STRING "C++ standard to build with (17 or 20)")
+set_property(CACHE ORESHNEK_CXX_STANDARD PROPERTY STRINGS 17 20)
+if(NOT ORESHNEK_CXX_STANDARD MATCHES "^(17|20)$")
+    message(FATAL_ERROR "ORESHNEK_CXX_STANDARD must be 17 or 20 (got '${ORESHNEK_CXX_STANDARD}')")
+endif()
+set(CMAKE_CXX_STANDARD ${ORESHNEK_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 

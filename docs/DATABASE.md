@@ -28,10 +28,12 @@ CMake falla si no se activa ninguno. Ver la sección
 - **Una abstracción, tres backends concretos**: SQLite3, PostgreSQL (vía `libpq`)
   y Oracle (vía OCI). Extensible a MySQL, MongoDB, ClickHouse, DB2, etc.
 - **Sin `virtual` / herencia de interfaz**. Polimorfismo estático: **CRTP** +
-  **concepts** (C++20) para el contrato, y `std::variant` + `std::visit` para la
-  selección en tiempo de ejecución, sin vtables.
-- **Selección por configuración** (`db.backend = "postgres" | "sqlite"`), sin
-  recompilar.
+  **concepts** (C++20) para el contrato — con *fallback* automático a un trait
+  SFINAE equivalente cuando se compila en C++17 (`ORESHNEK_CXX_STANDARD=17`) —
+  y `std::variant` + `std::visit` para la selección en tiempo de ejecución, sin
+  vtables.
+- **Selección por configuración** (`db.backend = "postgres" | "sqlite" | "oracle"`),
+  sin recompilar.
 - **Seguridad por defecto**: siempre consultas parametrizadas (nunca concatenación)
   → anti SQL injection.
 
@@ -90,6 +92,14 @@ protected:
     const Derived& self() const { return static_cast<const Derived&>(*this); }
 };
 ```
+
+**Portabilidad C++17**: cuando se compila con `ORESHNEK_CXX_STANDARD=17`
+(`include/oreshnek/platform/DatabaseBackend.h` detecta la ausencia de
+`__cpp_concepts`), `DatabaseBackend` deja de ser un `concept` y pasa a ser un
+`inline constexpr bool` calculado con un trait SFINAE (`std::void_t` +
+`std::is_same` sobre el tipo de retorno de `run_impl`). La sintaxis en los
+call-sites (`static_assert(DatabaseBackend<SqliteBackend>)`, etc.) no cambia en
+ningún caso — solo cambia qué hay detrás del nombre según el estándar.
 
 ### 2) Backends concretos
 

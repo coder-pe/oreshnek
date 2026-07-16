@@ -12,6 +12,7 @@
 #include "oreshnek/platform/Config.h"          // External configuration loader
 #include "oreshnek/platform/DatabaseManager.h" // Generic SQL gateway
 #include "oreshnek/utils/Logger.h"             // Structured logging
+#include "oreshnek/utils/StringUtil.h"         // Portable starts_with/ends_with
 
 #include <csignal>
 #include <filesystem>
@@ -205,11 +206,12 @@ int main(int argc, char** argv) {
             }
 
             std::string content_type = "application/octet-stream";
-            if (relative_path.ends_with(".css")) content_type = "text/css";
-            else if (relative_path.ends_with(".js")) content_type = "application/javascript";
-            else if (relative_path.ends_with(".png")) content_type = "image/png";
-            else if (relative_path.ends_with(".jpg") || relative_path.ends_with(".jpeg")) content_type = "image/jpeg";
-            else if (relative_path.ends_with(".html") || relative_path.ends_with(".htm")) content_type = "text/html";
+            using Oreshnek::Utils::ends_with;
+            if (ends_with(relative_path, ".css")) content_type = "text/css";
+            else if (ends_with(relative_path, ".js")) content_type = "application/javascript";
+            else if (ends_with(relative_path, ".png")) content_type = "image/png";
+            else if (ends_with(relative_path, ".jpg") || ends_with(relative_path, ".jpeg")) content_type = "image/jpeg";
+            else if (ends_with(relative_path, ".html") || ends_with(relative_path, ".htm")) content_type = "text/html";
 
             res.status(Oreshnek::Http::HttpStatus::OK).file(*resolved, content_type);
             // Let the browser cache static assets; the framework adds ETag/

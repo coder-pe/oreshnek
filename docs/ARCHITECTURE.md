@@ -6,7 +6,8 @@ completo de madurez a producción, ver [ROADMAP.md](ROADMAP.md).
 
 ## Visión general
 
-Oreshnek es un framework HTTP en C++20 con patrón **reactor**:
+Oreshnek es un framework HTTP en C++ (compila con C++20 o C++17, vía
+`ORESHNEK_CXX_STANDARD`) con patrón **reactor**:
 
 - Un **event loop** de un solo hilo sobre `epoll` (Linux) o `kqueue` (macOS),
   con disparo por flanco (`EPOLLET`) y re-armado explícito (`EPOLLONESHOT`).

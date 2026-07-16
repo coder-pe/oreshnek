@@ -11,7 +11,7 @@ sanitizers**. No compiten en la misma liga de madurez, pero sí en filosofía.
 | Dimensión | Oreshnek | Drogon |
 |-----------|----------|--------|
 | Madurez | Proyecto de endurecimiento desde cero (Fases 0–6) | ~14k★, 2000+ commits, 60+ releases, top en TechEmpower |
-| Estándar C++ | C++20 | C++17/20 (soporta C++14) |
+| Estándar C++ | C++20 (o C++17 vía `ORESHNEK_CXX_STANDARD`) | C++17/20 (soporta C++14) |
 | Licencia | (la del repo) | MIT |
 | Dependencias | Mínimas: nlohmann/json, OpenSSL, SQLite, libpq | Más amplias: trantor, jsoncpp, OpenSSL, zlib/brotli, clientes DB, uuid |
 | Arquitectura | Reactor de **un** event loop (epoll/kqueue, edge-triggered) + thread pool de handlers | Multi event-loop (uno por hilo de E/S, modelo trantor) |

@@ -11,6 +11,7 @@
 //   curl -I localhost:8080/files/index.txt            # HEAD
 
 #include "oreshnek/Oreshnek.h"
+#include "oreshnek/utils/StringUtil.h"
 #include "common.h"
 
 #include <filesystem>
@@ -36,12 +37,13 @@ std::optional<std::string> resolve_within(const std::string& base_dir, const std
 }
 
 std::string content_type_for(const std::string& path) {
-    if (path.ends_with(".html")) return "text/html";
-    if (path.ends_with(".css")) return "text/css";
-    if (path.ends_with(".js")) return "application/javascript";
-    if (path.ends_with(".json")) return "application/json";
-    if (path.ends_with(".png")) return "image/png";
-    if (path.ends_with(".txt")) return "text/plain";
+    using Oreshnek::Utils::ends_with;
+    if (ends_with(path, ".html")) return "text/html";
+    if (ends_with(path, ".css")) return "text/css";
+    if (ends_with(path, ".js")) return "application/javascript";
+    if (ends_with(path, ".json")) return "application/json";
+    if (ends_with(path, ".png")) return "image/png";
+    if (ends_with(path, ".txt")) return "text/plain";
     return "application/octet-stream";
 }
 }  // namespace
