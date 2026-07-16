@@ -29,7 +29,7 @@ Oreshnek es un framework HTTP en C++20 con patrón **reactor**:
 | `ThreadPool` | Workers que consumen tareas de una cola. |
 | `Platform::Config` | Carga `ServerConfig` desde fichero JSON + overrides por entorno. |
 | `DatabaseManager` | Frontera sobre los backends (`std::variant` + `std::visit`, sin `virtual`). |
-| `SqliteBackend` / `PgBackend` | Concretos CRTP: SQLite3 (`SqlitePool`/WAL) y PostgreSQL (`PgPool`/libpq). |
+| `SqliteBackend` / `PgBackend` / `OracleBackend` | Concretos CRTP: SQLite3 (`SqlitePool`/WAL), PostgreSQL (`PgPool`/libpq) y Oracle (`OraclePool`/OCI). Cada uno opt-in en CMake. |
 | `Net::TlsContext` | Envuelve un `SSL_CTX` de servidor (cert/key); crea el `SSL` por conexión. |
 | `Utils::Logger` | Logging estructurado thread-safe con sink a fichero y rotación (`ORE_LOG(LEVEL) << ...`). |
 
@@ -216,7 +216,9 @@ brotli (`libbrotli`) es opcional y se autodetecta en compilación.
 `DatabaseManager` es una **frontera** sobre los backends concretos, con
 **polimorfismo estático** (sin `virtual`): un `concept DatabaseBackend` + base
 **CRTP** `DatabaseBase<Derived>` definen el contrato, y la selección en runtime se
-hace con `std::variant` + `std::visit`. Hay dos concretos:
+hace con `std::variant` + `std::visit`. Hay tres concretos, cada uno **opt-in en
+CMake** (`ORESHNEK_WITH_SQLITE`/`_POSTGRES`/`_ORACLE`, ninguno activo por
+defecto — ver [DATABASE.md](DATABASE.md#compilación-backends-opt-in)):
 
 - **`SqliteBackend`** — `Platform::SqlitePool`: N conexiones al mismo fichero en
   modo **WAL** (lectores concurrentes + un escritor), `synchronous=NORMAL`,
@@ -224,11 +226,15 @@ hace con `std::variant` + `std::visit`. Hay dos concretos:
 - **`PgBackend`** (principal) — `Platform::PgPool`: pool de conexiones **libpq**
   con RAII + reconexión (`PQreset`); consultas siempre parametrizadas (`$n`,
   anti-inyección).
+- **`OracleBackend`** — `Platform::OraclePool`: pool de sesiones **OCI** (vía el
+  Instant Client SDK) con RAII; consultas siempre parametrizadas (`:n`,
+  anti-inyección).
 
-El backend se elige por configuración (`db.backend`). Cada operación toma una
-conexión del pool (RAII), en lugar de serializar en un mutex global, permitiendo
-consultas en paralelo desde los workers. Diseño y extensibilidad (Oracle, MySQL,
-MongoDB, ...) en [DATABASE.md](DATABASE.md).
+El backend se elige por configuración (`db.backend`), limitado a los que este
+build tiene compilados. Cada operación toma una conexión del pool (RAII), en
+lugar de serializar en un mutex global, permitiendo consultas en paralelo desde
+los workers. Diseño y extensibilidad (MySQL, MongoDB, ...) en
+[DATABASE.md](DATABASE.md).
 
 ## Logging
 
