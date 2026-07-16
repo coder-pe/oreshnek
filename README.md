@@ -1,6 +1,6 @@
 # Oreshnek C++ Web Framework
 
-Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado para construir aplicaciones y APIs web rápidas y escalables. Utiliza un modelo asíncrono y basado en eventos con `epoll` en Linux y `kqueue` en macOS para una gestión eficiente de las conexiones.
+Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado para construir aplicaciones y APIs web rápidas y escalables. Compila con **C++20 o C++17** (`ORESHNEK_CXX_STANDARD`), para funcionar también en toolchains sin compilador C++20. Utiliza un modelo asíncrono y basado en eventos con `epoll` en Linux y `kqueue` en macOS para una gestión eficiente de las conexiones.
 
 > **Estado:** endurecido hacia producción (Fases 0–6). Completadas:
 > estabilidad/concurrencia (sin data races ni use-after-free, verificado con
@@ -19,7 +19,7 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 ## Características Principales
 
 *   **Servidor Asíncrono:** Construido sobre `epoll` (Linux) y `kqueue` (macOS) para manejar un gran número de conexiones concurrentes con baja sobrecarga.
-*   **Moderno:** Escrito completamente en C++20, aprovechando las últimas características del lenguaje.
+*   **Moderno:** Escrito en C++20 (concepts, etc.) con un *fallback* automático a C++17 cuando se compila con `ORESHNEK_CXX_STANDARD=17`, sin cambios de código para el usuario del framework.
 *   **Multihilo:** Utiliza un pool de hilos para procesar las peticiones de forma concurrente y no bloqueante.
 *   **Enrutador (Router):** Un sistema de enrutamiento simple pero potente para mapear rutas y métodos HTTP a funciones manejadoras (handlers).
 *   **Manejo de HTTP/1.1:** Peticiones (`HttpRequest`) y respuestas (`HttpResponse`), keep-alive, pipelining, `Transfer-Encoding: chunked`, `Expect: 100-continue` y `HEAD`.
@@ -38,7 +38,7 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 
 Para compilar y ejecutar un proyecto con Oreshnek, necesitarás:
 
-*   Un compilador compatible con C++20 (GCC 10+, Clang 12+).
+*   Un compilador compatible con C++17 o C++20 (GCC 8+ para C++17, GCC 10+ para C++20; Clang 7+/12+ respectivamente).
 *   CMake (versión 3.16 o superior).
 *   OpenSSL (criptografía y TLS).
 *   Al menos un backend de base de datos habilitado en CMake (ver abajo):
@@ -70,6 +70,7 @@ El ejecutable `oreshnek_server` se encontrará en el directorio `build/`.
 
 | Opción CMake | Por defecto | Descripción |
 |--------------|-------------|-------------|
+| `ORESHNEK_CXX_STANDARD` | `20` | Estándar de C++ a usar (`17` o `20`). Usa `17` si el compilador del servidor no soporta C++20. |
 | `ORESHNEK_BUILD_TESTS` | `ON` | Compila la suite de tests. |
 | `ORESHNEK_BUILD_EXAMPLES` | `ON` | Compila los ejemplos de `examples/`. |
 | `ORESHNEK_ASAN` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer. |
@@ -98,6 +99,9 @@ cmake -B build -DORESHNEK_WITH_ORACLE=ON \
 
 # Varios a la vez
 cmake -B build -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_WITH_POSTGRES=ON -DORESHNEK_WITH_ORACLE=ON
+
+# Compilador sin C++20 (por ejemplo GCC 8/9 en un servidor antiguo)
+cmake -B build -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_CXX_STANDARD=17
 ```
 
 Detalles de cada backend (config, límites, pool de conexiones) en
