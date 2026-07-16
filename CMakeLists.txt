@@ -1,6 +1,6 @@
 # CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
-project(OreshnekServer CXX)
+project(OreshnekServer VERSION 0.1.0 LANGUAGES CXX)
 
 # C++20 is preferred (enables real concepts for the database backend contract),
 # but the framework also builds under C++17 for toolchains that lack a C++20

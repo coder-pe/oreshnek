@@ -1,5 +1,7 @@
 # Oreshnek C++ Web Framework
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
 Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado para construir aplicaciones y APIs web rápidas y escalables. Compila con **C++20 o C++17** (`ORESHNEK_CXX_STANDARD`), para funcionar también en toolchains sin compilador C++20. Utiliza un modelo asíncrono y basado en eventos con `epoll` en Linux y `kqueue` en macOS para una gestión eficiente de las conexiones.
 
 > **Estado:** endurecido hacia producción (Fases 0–6). Completadas:
@@ -14,7 +16,9 @@ Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado pa
 > [análisis y apps optimizadas](docs/ANALYSIS.md) ·
 > [arquitectura](docs/ARCHITECTURE.md) · [seguridad](docs/SECURITY.md) ·
 > [persistencia/BD](docs/DATABASE.md) ·
-> [comparativa con Drogon](docs/COMPARISON_DROGON.md).
+> [comparativa con Drogon](docs/COMPARISON_DROGON.md) ·
+> [changelog](CHANGELOG.md) ·
+> [licencia](LICENSE) · [licencia comercial](COMMERCIAL.md).
 
 ## Características Principales
 
@@ -227,3 +231,17 @@ El framework está organizado en los siguientes módulos principales:
 *   `/docs/`: [Arquitectura](docs/ARCHITECTURE.md), [seguridad](docs/SECURITY.md),
     [persistencia](docs/DATABASE.md), [análisis](docs/ANALYSIS.md),
     [comparativa](docs/COMPARISON_DROGON.md) y [roadmap](docs/ROADMAP.md).
+
+## Licencia
+
+Oreshnek se distribuye bajo **licencia dual**:
+
+*   **[AGPL-3.0](LICENSE)** — libre para usar, modificar y redistribuir,
+    incluidas pruebas y evaluación, sin costo. Su condición: si ejecutas una
+    versión modificada (o una aplicación que lo integre) accesible a terceros
+    por red, debes publicar el código fuente correspondiente (sección 13 de
+    AGPL-3.0, la "cláusula de red/SaaS").
+*   **Licencia comercial** — para quien necesite usar Oreshnek sin las
+    obligaciones de AGPL-3.0 (por ejemplo, dentro de un producto cerrado). No
+    es automática: debe solicitarse explícitamente. Ver
+    [`COMMERCIAL.md`](COMMERCIAL.md) para el proceso y el contacto.
