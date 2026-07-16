@@ -3,9 +3,17 @@
 #define ORESHNEK_PLATFORM_DATABASE_MANAGER_H
 
 #include "oreshnek/platform/Config.h"        // ServerConfig
-#include "oreshnek/platform/PgBackend.h"
 #include "oreshnek/platform/SqlResult.h"
+
+#if defined(ORESHNEK_WITH_SQLITE)
 #include "oreshnek/platform/SqliteBackend.h"
+#endif
+#if defined(ORESHNEK_WITH_POSTGRES)
+#include "oreshnek/platform/PgBackend.h"
+#endif
+#if defined(ORESHNEK_WITH_ORACLE)
+#include "oreshnek/platform/OracleBackend.h"
+#endif
 
 #include <memory>
 #include <string_view>
@@ -17,6 +25,15 @@ namespace Platform {
 // Domain-agnostic boundary over the concrete database backends. The active
 // backend is chosen at runtime from the configuration and stored in a
 // std::variant; every call is dispatched with std::visit (no virtual).
+//
+// Each backend is only compiled in (and only present in the Backend variant)
+// when the matching CMake option is on: ORESHNEK_WITH_SQLITE,
+// ORESHNEK_WITH_POSTGRES, ORESHNEK_WITH_ORACLE. A project depends only on the
+// database(s) it actually uses. std::monostate is always the first
+// alternative so the variant is never empty regardless of which combination
+// is enabled; make_backend() never selects it — it exists purely so the
+// preprocessor can prepend backends with a leading comma without special-
+// casing "the first one".
 //
 // The manager exposes only the generic query()/exec() gateway — it deliberately
 // knows nothing about application models. Build your own repository on top:
@@ -36,8 +53,17 @@ private:
     // behind unique_ptr: this keeps the variant movable and lets us pick the
     // backend at runtime in make_backend(). Add a backend by extending this
     // variant and make_backend(); std::visit call sites stay untouched.
-    using Backend = std::variant<std::unique_ptr<SqliteBackend>,
-                                 std::unique_ptr<PgBackend>>;
+    using Backend = std::variant<std::monostate
+#if defined(ORESHNEK_WITH_SQLITE)
+        , std::unique_ptr<SqliteBackend>
+#endif
+#if defined(ORESHNEK_WITH_POSTGRES)
+        , std::unique_ptr<PgBackend>
+#endif
+#if defined(ORESHNEK_WITH_ORACLE)
+        , std::unique_ptr<OracleBackend>
+#endif
+        >;
 
     static Backend make_backend(const ServerConfig& config);
 

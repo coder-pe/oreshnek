@@ -17,11 +17,25 @@ option(ORESHNEK_BUILD_TESTS "Build the test suite" ON)
 option(ORESHNEK_BUILD_EXAMPLES "Build the example programs (examples/)" ON)
 option(ORESHNEK_FUZZ "Build libFuzzer fuzz targets (needs a libFuzzer-capable clang)" OFF)
 
+# Database backends are opt-in: enable only the one(s) a given project actually
+# needs, so the build never depends on SQLite/PostgreSQL/Oracle client
+# libraries it doesn't use. At least one must be enabled explicitly, e.g.:
+#   cmake -B build -DORESHNEK_WITH_SQLITE=ON
+#   cmake -B build -DORESHNEK_WITH_POSTGRES=ON -DORESHNEK_WITH_ORACLE=ON
+option(ORESHNEK_WITH_SQLITE   "Build the SQLite3 database backend"   OFF)
+option(ORESHNEK_WITH_POSTGRES "Build the PostgreSQL database backend" OFF)
+option(ORESHNEK_WITH_ORACLE   "Build the Oracle database backend (OCI)" OFF)
+
 if(ORESHNEK_ASAN AND ORESHNEK_TSAN)
     message(FATAL_ERROR "ORESHNEK_ASAN and ORESHNEK_TSAN are mutually exclusive.")
 endif()
 if(ORESHNEK_FUZZ AND ORESHNEK_TSAN)
     message(FATAL_ERROR "ORESHNEK_FUZZ and ORESHNEK_TSAN are mutually exclusive.")
+endif()
+if(NOT ORESHNEK_WITH_SQLITE AND NOT ORESHNEK_WITH_POSTGRES AND NOT ORESHNEK_WITH_ORACLE)
+    message(FATAL_ERROR
+        "No database backend enabled. Enable at least one of "
+        "-DORESHNEK_WITH_SQLITE=ON, -DORESHNEK_WITH_POSTGRES=ON, -DORESHNEK_WITH_ORACLE=ON.")
 endif()
 
 # Sanitizer flags are applied to every target so the runtime is consistent.
@@ -46,24 +60,49 @@ if(OPENSSL_FOUND)
     message(STATUS "Found OpenSSL: ${OPENSSL_VERSION}")
 endif()
 
-find_package(SQLite3 REQUIRED)
-if(SQLITE3_FOUND)
-    message(STATUS "Found SQLite3: ${SQLite3_VERSION}")
+if(ORESHNEK_WITH_SQLITE)
+    find_package(SQLite3 REQUIRED)
+    if(SQLITE3_FOUND)
+        message(STATUS "Found SQLite3: ${SQLite3_VERSION}")
+    endif()
 endif()
 
 # PostgreSQL client (libpq). On macOS, Homebrew's libpq is keg-only, so hint its
 # location; on Linux it lives in the default search paths.
-if(APPLE AND NOT PostgreSQL_ROOT)
-    execute_process(COMMAND brew --prefix libpq
-                    OUTPUT_VARIABLE ORESHNEK_BREW_LIBPQ
-                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(ORESHNEK_BREW_LIBPQ)
-        set(PostgreSQL_ROOT "${ORESHNEK_BREW_LIBPQ}")
+if(ORESHNEK_WITH_POSTGRES)
+    if(APPLE AND NOT PostgreSQL_ROOT)
+        execute_process(COMMAND brew --prefix libpq
+                        OUTPUT_VARIABLE ORESHNEK_BREW_LIBPQ
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(ORESHNEK_BREW_LIBPQ)
+            set(PostgreSQL_ROOT "${ORESHNEK_BREW_LIBPQ}")
+        endif()
+    endif()
+    find_package(PostgreSQL REQUIRED)
+    if(PostgreSQL_FOUND)
+        message(STATUS "Found PostgreSQL (libpq): ${PostgreSQL_VERSION_STRING}")
     endif()
 endif()
-find_package(PostgreSQL REQUIRED)
-if(PostgreSQL_FOUND)
-    message(STATUS "Found PostgreSQL (libpq): ${PostgreSQL_VERSION_STRING}")
+
+# Oracle client (OCI), via the Instant Client SDK. No stock CMake find module
+# ships an "OCI" package, so headers/library are located directly.
+# ORESHNEK_ORACLE_HOME defaults to this machine's Instant Client install; pass
+# -DORESHNEK_ORACLE_HOME=/path/to/instantclient to point at a different one.
+if(ORESHNEK_WITH_ORACLE)
+    set(ORESHNEK_ORACLE_HOME "/home/miguel/oracle/instantclient_23_26"
+        CACHE PATH "Path to the Oracle Instant Client (with its sdk/ subfolder)")
+
+    find_path(ORACLE_INCLUDE_DIR oci.h
+              HINTS "${ORESHNEK_ORACLE_HOME}/sdk/include" "$ENV{ORACLE_HOME}/sdk/include")
+    find_library(ORACLE_LIBRARY NAMES clntsh
+                 HINTS "${ORESHNEK_ORACLE_HOME}" "$ENV{ORACLE_HOME}")
+
+    if(NOT ORACLE_INCLUDE_DIR OR NOT ORACLE_LIBRARY)
+        message(FATAL_ERROR
+            "Oracle Instant Client SDK not found (oci.h / libclntsh.so). "
+            "Set -DORESHNEK_ORACLE_HOME=/path/to/instantclient_XX_YY.")
+    endif()
+    message(STATUS "Found Oracle Instant Client: ${ORESHNEK_ORACLE_HOME}")
 endif()
 
 # Compression: gzip via zlib (required), Brotli optional (auto-detected).
@@ -99,9 +138,21 @@ else()
 endif()
 
 # --- Framework library -------------------------------------------------------
-# Everything under src/ except the application entry point (main.cpp).
+# Everything under src/ except the application entry point (main.cpp) and any
+# database backend sources whose CMake option is off, so the build never
+# depends on a client library/headers it isn't using.
 file(GLOB_RECURSE ORESHNEK_LIB_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 list(FILTER ORESHNEK_LIB_SOURCES EXCLUDE REGEX ".*/main\\.cpp$")
+
+if(NOT ORESHNEK_WITH_SQLITE)
+    list(FILTER ORESHNEK_LIB_SOURCES EXCLUDE REGEX ".*/Sqlite(Backend|Pool)\\.cpp$")
+endif()
+if(NOT ORESHNEK_WITH_POSTGRES)
+    list(FILTER ORESHNEK_LIB_SOURCES EXCLUDE REGEX ".*/Pg(Backend|Pool)\\.cpp$")
+endif()
+if(NOT ORESHNEK_WITH_ORACLE)
+    list(FILTER ORESHNEK_LIB_SOURCES EXCLUDE REGEX ".*/Oracle(Backend|Pool)\\.cpp$")
+endif()
 
 add_library(oreshnek STATIC ${ORESHNEK_LIB_SOURCES})
 target_include_directories(oreshnek PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -109,12 +160,24 @@ target_link_libraries(oreshnek PUBLIC
     Threads::Threads
     OpenSSL::SSL
     OpenSSL::Crypto
-    SQLite::SQLite3
-    PostgreSQL::PostgreSQL
     ZLIB::ZLIB
     oreshnek_json
     oreshnek_sanitizers
 )
+
+if(ORESHNEK_WITH_SQLITE)
+    target_link_libraries(oreshnek PUBLIC SQLite::SQLite3)
+    target_compile_definitions(oreshnek PUBLIC ORESHNEK_WITH_SQLITE)
+endif()
+if(ORESHNEK_WITH_POSTGRES)
+    target_link_libraries(oreshnek PUBLIC PostgreSQL::PostgreSQL)
+    target_compile_definitions(oreshnek PUBLIC ORESHNEK_WITH_POSTGRES)
+endif()
+if(ORESHNEK_WITH_ORACLE)
+    target_include_directories(oreshnek SYSTEM PUBLIC ${ORACLE_INCLUDE_DIR})
+    target_link_libraries(oreshnek PUBLIC ${ORACLE_LIBRARY})
+    target_compile_definitions(oreshnek PUBLIC ORESHNEK_WITH_ORACLE)
+endif()
 if(ORESHNEK_HAVE_BROTLI)
     target_include_directories(oreshnek SYSTEM PRIVATE ${BROTLI_INCLUDE_DIR})
     target_link_libraries(oreshnek PUBLIC ${BROTLI_ENC} ${BROTLI_COMMON})
@@ -174,11 +237,13 @@ if(ORESHNEK_BUILD_TESTS)
     add_test(NAME lifecycle_test COMMAND lifecycle_test)
     set_tests_properties(lifecycle_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 
-    add_executable(db_test tests/db_test.cpp)
-    target_link_libraries(db_test PRIVATE oreshnek oreshnek_sanitizers)
-    target_compile_options(db_test PRIVATE -Wall -Wextra)
-    add_test(NAME db_test COMMAND db_test)
-    set_tests_properties(db_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+    if(ORESHNEK_WITH_SQLITE)
+        add_executable(db_test tests/db_test.cpp)
+        target_link_libraries(db_test PRIVATE oreshnek oreshnek_sanitizers)
+        target_compile_options(db_test PRIVATE -Wall -Wextra)
+        add_test(NAME db_test COMMAND db_test)
+        set_tests_properties(db_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+    endif()
 
     add_executable(middleware_test tests/middleware_test.cpp)
     target_link_libraries(middleware_test PRIVATE oreshnek oreshnek_sanitizers)
@@ -187,11 +252,22 @@ if(ORESHNEK_BUILD_TESTS)
     set_tests_properties(middleware_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 
     # PostgreSQL backend test: skips at runtime unless ORESHNEK_PG_TEST_DSN is set.
-    add_executable(pg_test tests/pg_test.cpp)
-    target_link_libraries(pg_test PRIVATE oreshnek oreshnek_sanitizers)
-    target_compile_options(pg_test PRIVATE -Wall -Wextra)
-    add_test(NAME pg_test COMMAND pg_test)
-    set_tests_properties(pg_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+    if(ORESHNEK_WITH_POSTGRES)
+        add_executable(pg_test tests/pg_test.cpp)
+        target_link_libraries(pg_test PRIVATE oreshnek oreshnek_sanitizers)
+        target_compile_options(pg_test PRIVATE -Wall -Wextra)
+        add_test(NAME pg_test COMMAND pg_test)
+        set_tests_properties(pg_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+    endif()
+
+    # Oracle backend test: skips at runtime unless ORESHNEK_ORACLE_TEST_DSN is set.
+    if(ORESHNEK_WITH_ORACLE)
+        add_executable(oracle_test tests/oracle_test.cpp)
+        target_link_libraries(oracle_test PRIVATE oreshnek oreshnek_sanitizers)
+        target_compile_options(oracle_test PRIVATE -Wall -Wextra)
+        add_test(NAME oracle_test COMMAND oracle_test)
+        set_tests_properties(oracle_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+    endif()
 
     add_executable(tls_test tests/tls_test.cpp)
     target_link_libraries(tls_test PRIVATE oreshnek oreshnek_sanitizers)

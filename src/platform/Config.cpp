@@ -89,6 +89,12 @@ ServerConfig Config::load(const std::string& path) {
                     assign_if_present(*p, "connect_timeout_sec", cfg.db.pg_connect_timeout_sec);
                     assign_if_present(*p, "url", cfg.db.pg_url);
                 }
+                if (auto o = db->find("oracle"); o != db->end() && o->is_object()) {
+                    assign_if_present(*o, "connect_string", cfg.db.ora_connect_string);
+                    assign_if_present(*o, "user", cfg.db.ora_user);
+                    assign_if_present(*o, "password", cfg.db.ora_password);
+                    assign_if_present(*o, "pool_size", cfg.db.ora_pool_size);
+                }
             }
 
             if (auto tls = config.find("tls"); tls != config.end() && tls->is_object()) {
@@ -134,6 +140,7 @@ ServerConfig Config::load(const std::string& path) {
     if (const char* v = env_or_null("ORESHNEK_DB_PATH"))      cfg.db.sqlite_path = v;
     if (const char* v = env_or_null("ORESHNEK_PG_PASSWORD"))  cfg.db.pg_password = v;
     if (const char* v = env_or_null("ORESHNEK_DATABASE_URL")) cfg.db.pg_url = v;
+    if (const char* v = env_or_null("ORESHNEK_ORACLE_PASSWORD")) cfg.db.ora_password = v;
     if (const char* v = env_or_null("ORESHNEK_TLS_CERT"))     cfg.tls.cert_file = v;
     if (const char* v = env_or_null("ORESHNEK_TLS_KEY"))      cfg.tls.key_file = v;
     if (const char* v = env_or_null("ORESHNEK_PORT")) {

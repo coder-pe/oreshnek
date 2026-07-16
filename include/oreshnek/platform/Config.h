@@ -10,9 +10,12 @@ namespace Oreshnek {
 namespace Platform {
 
 // Database selection and per-backend settings. The active backend is chosen by
-// `backend` ("sqlite" | "postgres"); only the matching sub-section is used.
+// `backend` ("sqlite" | "postgres" | "oracle"); only the matching sub-section
+// is used. Each backend is only available at runtime if this build was
+// compiled with the matching CMake option (ORESHNEK_WITH_SQLITE/POSTGRES/
+// ORACLE) — see DatabaseManager.
 struct DatabaseConfig {
-    std::string backend = "sqlite"; // "sqlite" | "postgres"
+    std::string backend = "sqlite"; // "sqlite" | "postgres" | "oracle"
 
     // SQLite backend.
     std::string sqlite_path = "./database.db";
@@ -31,6 +34,14 @@ struct DatabaseConfig {
     // Full libpq connection URL; if set (e.g. via ORESHNEK_DATABASE_URL) it wins
     // over the individual pg_* fields above.
     std::string pg_url;
+
+    // Oracle backend (OCI, via the Instant Client SDK).
+    // Easy Connect string ("host:port/service_name") or a TNS alias resolvable
+    // via tnsnames.ora (TNS_ADMIN / ORACLE_HOME network/admin directory).
+    std::string ora_connect_string;
+    std::string ora_user;
+    std::string ora_password;  // prefer ORESHNEK_ORACLE_PASSWORD
+    int ora_pool_size = 8;
 };
 
 // TLS / HTTPS settings. When enabled, the listen socket speaks TLS (the server
@@ -122,7 +133,7 @@ struct ServerConfig {
 //   3. Environment variables, so secrets stay out of the file/VCS:
 //        ORESHNEK_JWT_SECRET, ORESHNEK_PORT, ORESHNEK_HOST, ORESHNEK_LOG_LEVEL,
 //        ORESHNEK_LOG_FILE, ORESHNEK_DB_BACKEND, ORESHNEK_PG_PASSWORD,
-//        ORESHNEK_DATABASE_URL.
+//        ORESHNEK_DATABASE_URL, ORESHNEK_ORACLE_PASSWORD.
 //
 // A missing file is not an error (defaults + env are used). A malformed file
 // throws std::runtime_error so the operator notices instead of silently running

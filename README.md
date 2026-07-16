@@ -6,7 +6,7 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 > estabilidad/concurrencia (sin data races ni use-after-free, verificado con
 > sanitizers), seguridad (JWT/PBKDF2, anti directory-traversal, límites),
 > HTTP/1.1 + streaming, robustez productiva (config externa, logging, timeouts,
-> shutdown graceful, middleware), abstracción de BD + **PostgreSQL**, y
+> shutdown graceful, middleware), abstracción de BD + **PostgreSQL/Oracle**, y
 > **TLS + rate limiting + métricas Prometheus**. El plan y su progreso están en
 > [`docs/ROADMAP.md`](docs/ROADMAP.md).
 >
@@ -29,7 +29,7 @@ Oreshnek es un framework web para C++20 ligero y de alto rendimiento, diseñado 
 *   **Subidas multipart:** Parser `multipart/form-data` integrado (`Http::Multipart`).
 *   **TLS/HTTPS:** Opcional sobre OpenSSL con handshake no bloqueante.
 *   **Middleware:** Cadena encadenable con short-circuit (CORS, logging, JWT, propios).
-*   **Bases de datos:** Gateway SQL **genérico y agnóstico del dominio** (`query`/`exec` parametrizado, filas genéricas); el framework no impone modelos. Abstracción sin `virtual` (CRTP) con backends **SQLite** y **PostgreSQL** (libpq), seleccionables por configuración.
+*   **Bases de datos:** Gateway SQL **genérico y agnóstico del dominio** (`query`/`exec` parametrizado, filas genéricas); el framework no impone modelos. Abstracción sin `virtual` (CRTP) con backends **SQLite**, **PostgreSQL** (libpq) y **Oracle** (OCI), seleccionables por configuración. Cada backend es **opt-in en compilación** (`ORESHNEK_WITH_SQLITE` / `_POSTGRES` / `_ORACLE`): el build solo depende del cliente que el proyecto realmente use.
 *   **Operación:** Configuración externa (JSON + entorno), logging estructurado con rotación, timeouts, apagado graceful, **rate limiting** por IP y **métricas Prometheus** (`/metrics`).
 *   **Seguridad:** PBKDF2-HMAC-SHA256, JWT HS256 (tiempo constante), límites anti-DoS.
 *   **Extensible:** Arquitectura modular; ver [puntos de personalización](examples/README.md).
@@ -41,7 +41,8 @@ Para compilar y ejecutar un proyecto con Oreshnek, necesitarás:
 *   Un compilador compatible con C++20 (GCC 10+, Clang 12+).
 *   CMake (versión 3.16 o superior).
 *   OpenSSL (criptografía y TLS).
-*   SQLite3 y `libpq` (PostgreSQL) para los backends de base de datos.
+*   Al menos un backend de base de datos habilitado en CMake (ver abajo):
+    SQLite3, `libpq` (PostgreSQL) o el Instant Client SDK de Oracle (OCI).
 *   zlib (gzip); brotli **opcional** (Content-Encoding: br, autodetectado).
 *   nlohmann/json (vendorizado en `nlohmann_json/`, o un paquete del sistema).
 
@@ -55,8 +56,9 @@ El proyecto utiliza CMake para la compilación. Sigue estos pasos para compilar 
 # 1. Clona el repositorio (si no lo has hecho)
 # git clone ...
 
-# 2. Crea un directorio de compilación
-cmake -B build
+# 2. Crea un directorio de compilación, habilitando al menos un backend de BD
+#    (ninguno está habilitado por defecto — ver "Backends de base de datos").
+cmake -B build -DORESHNEK_WITH_SQLITE=ON
 
 # 3. Compila el proyecto
 cmake --build build
@@ -72,6 +74,34 @@ El ejecutable `oreshnek_server` se encontrará en el directorio `build/`.
 | `ORESHNEK_BUILD_EXAMPLES` | `ON` | Compila los ejemplos de `examples/`. |
 | `ORESHNEK_ASAN` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer. |
 | `ORESHNEK_TSAN` | `OFF` | ThreadSanitizer (mutuamente excluyente con ASan). |
+| `ORESHNEK_WITH_SQLITE` | `OFF` | Backend SQLite3. |
+| `ORESHNEK_WITH_POSTGRES` | `OFF` | Backend PostgreSQL (libpq). |
+| `ORESHNEK_WITH_ORACLE` | `OFF` | Backend Oracle (OCI, Instant Client SDK). |
+| `ORESHNEK_ORACLE_HOME` | ver [`docs/DATABASE.md`](docs/DATABASE.md) | Ruta al Instant Client (solo si `ORESHNEK_WITH_ORACLE=ON`). |
+
+#### Backends de base de datos
+
+Ningún backend está habilitado por defecto: el proyecto **falla la configuración
+de CMake** si no se activa al menos uno, para no arrastrar dependencias que no
+vas a usar. Combínalos según necesites:
+
+```bash
+# Solo SQLite (sin dependencias externas de servidor)
+cmake -B build -DORESHNEK_WITH_SQLITE=ON
+
+# Solo PostgreSQL
+cmake -B build -DORESHNEK_WITH_POSTGRES=ON
+
+# Solo Oracle (usa el Instant Client SDK instalado en ORESHNEK_ORACLE_HOME)
+cmake -B build -DORESHNEK_WITH_ORACLE=ON \
+    -DORESHNEK_ORACLE_HOME=/home/miguel/oracle/instantclient_23_26
+
+# Varios a la vez
+cmake -B build -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_WITH_POSTGRES=ON -DORESHNEK_WITH_ORACLE=ON
+```
+
+Detalles de cada backend (config, límites, pool de conexiones) en
+[`docs/DATABASE.md`](docs/DATABASE.md).
 
 La compilación produce una librería estática `oreshnek` (el framework) y el
 ejecutable de ejemplo `oreshnek_server`.
