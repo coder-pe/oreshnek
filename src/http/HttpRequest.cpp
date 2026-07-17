@@ -48,6 +48,7 @@ void HttpRequest::copy_from(const HttpRequest& other) {
     query_params_ = other.query_params_;
     path_params_ = other.path_params_;
     body_ = other.body_;
+    body_file_ = other.body_file_;
     owned_storage_ = other.owned_storage_;
     // If the source owned its bytes, our views still point into the source's
     // buffer; repoint them at our own copy so we don't dangle when it dies.
@@ -65,6 +66,7 @@ void HttpRequest::move_from(HttpRequest&& other) noexcept {
     query_params_ = std::move(other.query_params_);
     path_params_ = std::move(other.path_params_);
     body_ = other.body_;
+    body_file_ = std::move(other.body_file_);
     owned_storage_ = std::move(other.owned_storage_);
     // std::string move may relocate (SSO); repoint views if the buffer moved.
     if (old_base != nullptr) {

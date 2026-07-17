@@ -154,11 +154,21 @@ Orientada al caso de uso de video en vivo (ver memoria de objetivos). El framewo
 cubre el tier de **API + origen HLS**; ingesta/transcodificación/WebRTC/CDN se
 delegan a infraestructura especializada.
 
+- ✅ **Streaming del cuerpo de subida a disco** — un cuerpo con `Content-Length`
+  por encima de un umbral se derrama (spool) directo a un fichero temporal según
+  llega (memoria constante), y el handler recibe su ruta vía
+  `HttpRequest::body_file()`. Levanta el tope de ~1 MiB del buffer de lectura en
+  subidas. `Server::enable_upload_streaming` / sección `upload` de config; test
+  `upload_test` (subida multi-MiB íntegra, 413 sobre el cap, vía bufferizada,
+  limpieza) verde en normal/ASan/TSan. Primera app real:
+  [`apps/fileapi`](../apps/fileapi/README.md) (API HTTPS de almacenamiento).
+  Límite v1: requiere `Content-Length` (no `chunked` grande); spool en el hilo
+  del loop (disco local).
 - ⬜ **WebSocket** (RFC 6455) — chat/gifts/presencia/señalización; clave para la
   capa interactiva tipo TikTok/YouTube Live.
 - ⬜ **Streaming de respuesta sin buffer completo** — generar el cuerpo por trozos
   (chunked) desde el handler y poder retener una petición (long-poll); requisito
-  de LL-HLS y arregla el límite actual de cuerpo buffeado entero (1 MiB).
+  de LL-HLS.
 - 🔄 **Fuzzing del parser** (libFuzzer + ASan/UBSan): target `fuzz_http_parser`
   con arnés de invariantes (dos modos: una-pasada e incremental estilo
   `Connection::parse_next`), corpus semilla y replay determinista

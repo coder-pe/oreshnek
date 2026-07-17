@@ -121,6 +121,13 @@ ServerConfig Config::load(const std::string& path) {
                 assign_if_present(*cz, "brotli", cfg.compression.brotli);
             }
 
+            if (auto up = config.find("upload"); up != config.end() && up->is_object()) {
+                assign_if_present(*up, "enabled", cfg.upload.enabled);
+                assign_if_present(*up, "spool_dir", cfg.upload.spool_dir);
+                assign_if_present(*up, "stream_threshold_bytes", cfg.upload.stream_threshold_bytes);
+                assign_if_present(*up, "max_upload_bytes", cfg.upload.max_upload_bytes);
+            }
+
             assign_if_present(config, "cors_enabled", cfg.cors_enabled);
             assign_if_present(config, "cors_allow_origin", cfg.cors_allow_origin);
 

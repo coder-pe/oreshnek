@@ -14,6 +14,7 @@ void HttpParser::reset() {
     state_ = ParsingState::REQUEST_LINE;
     body_expected_length_ = 0;
     is_chunked_ = false;
+    enforce_body_limit_ = true;
     error_message_.clear();
 }
 
@@ -71,6 +72,35 @@ bool HttpParser::parse_request(std::string_view raw_buffer, size_t& bytes_proces
     }
 
     return state_ == ParsingState::COMPLETE;
+}
+
+ParseHeadersResult HttpParser::parse_headers_only(std::string_view raw_buffer, size_t& header_len,
+                                                  HttpRequest& request) {
+    header_len = 0;
+    // The streaming path governs body size via the server's max_upload_bytes, so
+    // do not reject on MAX_BODY_BYTES here.
+    enforce_body_limit_ = false;
+
+    // Same header-block guard as parse_request (slowloris / giant headers).
+    size_t header_end = raw_buffer.find("\r\n\r\n");
+    size_t header_span = (header_end == std::string_view::npos) ? raw_buffer.size() : header_end;
+    if (header_span > MAX_HEADER_BYTES) {
+        state_ = ParsingState::ERROR;
+        error_message_ = "Header block exceeds maximum allowed size";
+        return ParseHeadersResult::Error;
+    }
+
+    std::string_view current = raw_buffer;
+    while (state_ == ParsingState::REQUEST_LINE || state_ == ParsingState::HEADERS) {
+        const bool step_complete = (state_ == ParsingState::REQUEST_LINE)
+                                       ? parse_request_line(current, request)
+                                       : parse_headers(current, request);
+        if (state_ == ParsingState::ERROR) return ParseHeadersResult::Error;
+        if (!step_complete) return ParseHeadersResult::NeedMore;  // incomplete line/headers
+    }
+    // Header block finished: state is now BODY (has body) or COMPLETE (no body).
+    header_len = raw_buffer.size() - current.size();
+    return ParseHeadersResult::Ready;
 }
 
 bool HttpParser::parse_request_line(std::string_view& data, HttpRequest& request) {
@@ -192,7 +222,7 @@ bool HttpParser::parse_headers(std::string_view& data, HttpRequest& request) {
                     error_message_ = "Invalid Content-Length header: " + std::string(*content_length_header);
                     return false;
                 }
-                if (body_expected_length_ > MAX_BODY_BYTES) {
+                if (enforce_body_limit_ && body_expected_length_ > MAX_BODY_BYTES) {
                     state_ = ParsingState::ERROR;
                     error_message_ = "Request body exceeds maximum allowed size";
                     return false;

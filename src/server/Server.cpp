@@ -18,6 +18,8 @@
 #include <variant>    // For std::holds_alternative / std::get (response body)
 #include <vector>     // For cleanup_expired_connections
 #include <utility>    // For std::swap
+#include <cstdint>    // For uint64_t (upload streaming limits)
+#include <filesystem> // For create_directories (upload spool dir)
 
 // Platform specific includes
 #ifdef __linux__
@@ -294,6 +296,22 @@ void Server::enable_compression(std::size_t min_bytes, bool allow_brotli) {
     compression_brotli_ = allow_brotli && Http::brotli_available();
     ORE_LOG(INFO) << "Response compression enabled (min " << min_bytes << " bytes, brotli "
                   << (compression_brotli_ ? "on" : "off") << ", gzip on)";
+}
+
+void Server::enable_upload_streaming(const std::string& spool_dir, std::uint64_t max_upload_bytes,
+                                     std::size_t stream_threshold_bytes) {
+    std::error_code ec;
+    std::filesystem::create_directories(spool_dir, ec);
+    if (ec) {
+        ORE_LOG(WARN) << "Could not create upload spool dir '" << spool_dir << "': " << ec.message();
+    }
+    upload_spool_dir_ = spool_dir;
+    upload_max_bytes_ = max_upload_bytes;
+    upload_stream_threshold_ = stream_threshold_bytes;
+    upload_streaming_enabled_ = true;
+    ORE_LOG(INFO) << "Upload streaming enabled (spool '" << spool_dir << "', threshold "
+                  << stream_threshold_bytes << " bytes, max "
+                  << (max_upload_bytes ? std::to_string(max_upload_bytes) : "unlimited") << ")";
 }
 
 void Server::set_non_blocking(int fd) {
@@ -731,7 +749,81 @@ void Server::handle_new_connection() {
 }
 
 void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn) {
+    // A streamed upload in progress: drain freshly-read body bytes to the spool
+    // file and finalize when the whole body has landed. This must run *before*
+    // the processing_ guard: no worker is in flight yet, but each read must keep
+    // draining to disk.
+    if (conn->body_mode_ == Net::Connection::BodyMode::Streaming) {
+        if (conn->spool_from_buffer() < 0) {           // disk write error
+            static const char k500[] =
+                "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            metrics_.record_status(500);
+            send_minimal_response(fd, k500, sizeof(k500) - 1);
+            close_connection(fd);
+            return;
+        }
+        if (conn->body_spool_complete()) {
+            finalize_streaming_upload(fd, conn);
+        } else {
+            rearm(fd, /*read=*/true);                  // want the rest of the body
+        }
+        return;
+    }
+
     if (conn->processing_) return; // A request is already in flight; wait for it.
+
+    // Decide whether an inbound request should stream its body to disk. Only once
+    // the header block is fully buffered (cheap check), and only when enabled.
+    if (upload_streaming_enabled_ &&
+        std::string_view(conn->read_buffer_.data(), conn->read_buffer_fill_)
+                .find("\r\n\r\n") != std::string_view::npos) {
+        size_t header_len = 0;
+        std::uint64_t clen = 0;
+        bool chunked = false;
+        Http::ParseHeadersResult pr = conn->peek_headers(header_len, clen, chunked);
+        if (pr == Http::ParseHeadersResult::Error) {
+            close_connection(fd);
+            return;
+        }
+        // Chunked bodies have no declared length (clen == 0) and fall through to
+        // the buffered path; only length-declared bodies above the threshold stream.
+        if (pr == Http::ParseHeadersResult::Ready && !chunked && clen > upload_stream_threshold_) {
+            metrics_.requests_total.fetch_add(1, std::memory_order_relaxed);
+
+            // Rate limit / size cap before spending disk on the spool file.
+            if (rate_limiter_ && !rate_limiter_->allow(conn->client_ip_)) {
+                static const char k429[] =
+                    "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n";
+                metrics_.rate_limited_total.fetch_add(1, std::memory_order_relaxed);
+                metrics_.record_status(429);
+                send_minimal_response(fd, k429, sizeof(k429) - 1);
+                close_connection(fd);
+                return;
+            }
+            if (upload_max_bytes_ > 0 && clen > upload_max_bytes_) {
+                static const char k413[] =
+                    "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                metrics_.record_status(413);
+                send_minimal_response(fd, k413, sizeof(k413) - 1);
+                close_connection(fd);
+                return;
+            }
+            if (!conn->begin_body_spool(upload_spool_dir_, header_len, clen)) {
+                static const char k500[] =
+                    "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                metrics_.record_status(500);
+                send_minimal_response(fd, k500, sizeof(k500) - 1);
+                close_connection(fd);
+                return;
+            }
+            if (conn->body_spool_complete()) {
+                finalize_streaming_upload(fd, conn);
+            } else {
+                rearm(fd, /*read=*/true);
+            }
+            return;
+        }
+    }
 
     size_t consumed = 0;
     if (conn->parse_next(consumed)) {
@@ -781,16 +873,36 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
         auto request = std::make_shared<Http::HttpRequest>(std::move(conn->current_request_));
         request->make_owned(conn->read_buffer_.data(), consumed);
         conn->consume(consumed);
-        conn->processing_ = true;
-        conn->worker_in_flight_ = true;
-        const auto t_start = std::chrono::steady_clock::now();
-        conn->processing_since_ = t_start;
+        dispatch_request_to_worker(fd, conn, std::move(request));
+        return;
+    }
 
-        // Count this handler as in flight before it is queued; the worker's guard
-        // (below) decrements it on completion. A hung handler never decrements,
-        // which is intentional — the gauge then reflects the wedged worker.
-        metrics_.workers_in_flight.fetch_add(1, std::memory_order_relaxed);
-        thread_pool_->enqueue([this, fd, conn, request, t_start]() {
+    if (conn->parser_failed()) {
+        close_connection(fd);
+        return;
+    }
+
+    // Incomplete request: if the client is waiting for "100 Continue" before
+    // sending the body, send it now, then wait for more data. Under TLS a read
+    // may have blocked needing writability, so re-arm in the requested direction.
+    conn->maybe_send_100_continue();
+    const bool want_read =
+        !(conn->uses_tls() && conn->tls_want() == Net::Connection::TlsWant::Write);
+    rearm(fd, want_read);
+}
+
+void Server::dispatch_request_to_worker(int fd, const std::shared_ptr<Net::Connection>& conn,
+                                        std::shared_ptr<Http::HttpRequest> request) {
+    conn->processing_ = true;
+    conn->worker_in_flight_ = true;
+    const auto t_start = std::chrono::steady_clock::now();
+    conn->processing_since_ = t_start;
+
+    // Count this handler as in flight before it is queued; the worker's guard
+    // (below) decrements it on completion. A hung handler never decrements,
+    // which is intentional — the gauge then reflects the wedged worker.
+    metrics_.workers_in_flight.fetch_add(1, std::memory_order_relaxed);
+    thread_pool_->enqueue([this, fd, conn, request, t_start]() {
             // Ensure the in-flight gauge is decremented however the handler exits
             // (normal return or exception); a truly stuck handler never reaches
             // this scope exit, so it stays counted, as intended.
@@ -868,21 +980,25 @@ void Server::dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn)
             }
             notify_event_loop();
         });
-        return;
-    }
+}
 
-    if (conn->parser_failed()) {
-        close_connection(fd);
-        return;
-    }
+void Server::finalize_streaming_upload(int fd, const std::shared_ptr<Net::Connection>& conn) {
+    // Capture what we need before finish_body_spool() clears it, then hand the
+    // file off (keep=true → it is NOT unlinked; the handler now owns it).
+    std::string spool_path = conn->body_file_path_;
+    std::string header_bytes = conn->upload_header_bytes_;
+    conn->finish_body_spool(/*keep=*/true);
 
-    // Incomplete request: if the client is waiting for "100 Continue" before
-    // sending the body, send it now, then wait for more data. Under TLS a read
-    // may have blocked needing writability, so re-arm in the requested direction.
-    conn->maybe_send_100_continue();
-    const bool want_read =
-        !(conn->uses_tls() && conn->tls_want() == Net::Connection::TlsWant::Write);
-    rearm(fd, want_read);
+    // Rebuild an owned request from the saved header block; its body lives on
+    // disk at spool_path (exposed to the handler via HttpRequest::body_file()).
+    auto request = std::make_shared<Http::HttpRequest>();
+    Http::HttpParser p;
+    size_t header_len = 0;
+    p.parse_headers_only(header_bytes, header_len, *request);
+    request->make_owned(header_bytes.data(), header_bytes.size());
+    request->set_body_file(std::move(spool_path));
+
+    dispatch_request_to_worker(fd, conn, std::move(request));
 }
 
 bool Server::drive_tls_handshake(int fd, const std::shared_ptr<Net::Connection>& conn) {

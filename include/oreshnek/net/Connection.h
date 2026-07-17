@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cstdint>     // For uint64_t (streaming body counters)
 #include <sys/types.h> // For off_t
 #include <openssl/ssl.h> // For SSL (TLS connection state)
 
@@ -76,6 +77,17 @@ public:
     bool worker_in_flight_ = false;
     std::chrono::steady_clock::time_point processing_since_;
 
+    // --- Streaming upload (request body spooled straight to disk) -----------
+    // When body_mode_ == Streaming, incoming body bytes are written to a temp
+    // file instead of being buffered/parsed in memory, so uploads are bounded by
+    // disk, not by READ_BUFFER_SIZE. Touched only by the event-loop thread.
+    enum class BodyMode { Buffered, Streaming };
+    BodyMode body_mode_ = BodyMode::Buffered;
+    int body_file_fd_ = -1;              // Open temp file, or -1.
+    std::string body_file_path_;         // Path of the temp file (empty once handed off).
+    std::uint64_t body_remaining_ = 0;   // Body bytes still to receive.
+    std::string upload_header_bytes_;    // Owned copy of the header block, to rebuild the request.
+
     Connection(int fd);
     ~Connection();
 
@@ -114,6 +126,33 @@ public:
     // "Expect: 100-continue", send a one-shot "100 Continue" so the client
     // starts uploading. No-op if already sent or not applicable.
     void maybe_send_100_continue();
+
+    // --- Streaming upload -----------------------------------------------------
+    // Peek at the buffered request headers without disturbing the main parser,
+    // to decide whether the body should stream to disk. On Ready, sets
+    // header_len (body start offset), content_length and chunked.
+    Http::ParseHeadersResult peek_headers(size_t& header_len, std::uint64_t& content_length,
+                                          bool& chunked);
+
+    // Begin spooling the request body to a new temp file under `dir`. `header_len`
+    // is where the body starts in read_buffer_; `content_length` is the total
+    // body size. Saves the header block, writes any already-buffered body bytes,
+    // and enters BodyMode::Streaming. Returns false on error (respond 500/close).
+    bool begin_body_spool(const std::string& dir, size_t header_len, std::uint64_t content_length);
+
+    // Drain the current read_buffer_ to the spool file (partial-write safe, at
+    // most body_remaining_ bytes; any surplus — a pipelined next request — is
+    // kept at the front of the buffer), decrement body_remaining_. Returns bytes
+    // written (>=0) or -1 on a disk error. Only meaningful in streaming mode.
+    ssize_t spool_from_buffer();
+
+    bool body_spool_complete() const {
+        return body_mode_ == BodyMode::Streaming && body_remaining_ == 0;
+    }
+
+    // Close the spool file. keep=true hands the file off to the handler (left on
+    // disk); keep=false unlinks it (abort/cleanup). Resets streaming state.
+    void finish_body_spool(bool keep);
 
     // --- TLS -----------------------------------------------------------------
     // Attach a freshly created (accept-state) SSL object; makes this a TLS conn.

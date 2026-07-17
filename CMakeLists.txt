@@ -23,6 +23,7 @@ option(ORESHNEK_ASAN  "Build with AddressSanitizer + UndefinedBehaviorSanitizer"
 option(ORESHNEK_TSAN  "Build with ThreadSanitizer" OFF)
 option(ORESHNEK_BUILD_TESTS "Build the test suite" ON)
 option(ORESHNEK_BUILD_EXAMPLES "Build the example programs (examples/)" ON)
+option(ORESHNEK_BUILD_APPS "Build the standalone applications (apps/)" OFF)
 option(ORESHNEK_FUZZ "Build libFuzzer fuzz targets (needs a libFuzzer-capable clang)" OFF)
 
 # Database backends are opt-in: enable only the one(s) a given project actually
@@ -213,6 +214,13 @@ if(ORESHNEK_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+# --- Applications ------------------------------------------------------------
+# Standalone apps built on the framework (each in its own directory with its own
+# CMakeLists linking the oreshnek library).
+if(ORESHNEK_BUILD_APPS)
+    add_subdirectory(apps/fileapi)
+endif()
+
 # --- Tests -------------------------------------------------------------------
 if(ORESHNEK_BUILD_TESTS)
     enable_testing()
@@ -232,6 +240,12 @@ if(ORESHNEK_BUILD_TESTS)
     target_compile_options(security_test PRIVATE -Wall -Wextra)
     add_test(NAME security_test COMMAND security_test)
     set_tests_properties(security_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
+    add_executable(upload_test tests/upload_test.cpp)
+    target_link_libraries(upload_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(upload_test PRIVATE -Wall -Wextra)
+    add_test(NAME upload_test COMMAND upload_test)
+    set_tests_properties(upload_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 
     add_executable(multipart_test tests/multipart_test.cpp)
     target_link_libraries(multipart_test PRIVATE oreshnek oreshnek_sanitizers)
