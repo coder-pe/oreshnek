@@ -175,7 +175,7 @@ target_link_libraries(oreshnek PUBLIC
 )
 
 if(ORESHNEK_WITH_SQLITE)
-    target_link_libraries(oreshnek PUBLIC SQLite::SQLite3)
+    target_link_libraries(oreshnek PUBLIC SQLite3::SQLite3)
     target_compile_definitions(oreshnek PUBLIC ORESHNEK_WITH_SQLITE)
 endif()
 if(ORESHNEK_WITH_POSTGRES)
