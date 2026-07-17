@@ -204,10 +204,8 @@ if(ORESHNEK_FUZZ)
     target_link_options(oreshnek PUBLIC -fsanitize=address,undefined)
 endif()
 
-# --- Application -------------------------------------------------------------
-add_executable(oreshnek_server src/main.cpp)
-target_link_libraries(oreshnek_server PRIVATE oreshnek oreshnek_sanitizers)
-target_compile_options(oreshnek_server PRIVATE -Wall -Wextra -pedantic)
+# The framework builds a library only; there is no application entry point in
+# src/. Runnable programs live in examples/ (demos) and apps/ (real apps).
 
 # --- Examples ----------------------------------------------------------------
 if(ORESHNEK_BUILD_EXAMPLES)

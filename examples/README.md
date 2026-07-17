@@ -17,6 +17,7 @@ cmake -S . -B build && cmake --build build
 | [`04_static_files`](04_static_files.cpp) | Servir ficheros | `HttpResponse::file()` (sendfile/Range/HEAD automáticos), resolución segura anti directory-traversal |
 | [`05_production`](05_production.cpp) | Despliegue real | `Config::load`, logging, timeouts + shutdown graceful, TLS, rate limiting, `/metrics` |
 | [`06_video_platform`](06_video_platform.cpp) | App de dominio completa | Construir un dominio propio (usuarios + vídeos: modelos, esquema y repositorio) **sobre** el gateway genérico — demuestra que el framework es de propósito general |
+| [`07_config_server`](07_config_server.cpp) | Servidor dirigido por config | Servidor completo cableado desde `oreshnek.json`: TLS + rate limiting + `/metrics` + compresión + recurso genérico "notes" + estáticos. Era el binario `oreshnek_server` de `src/main.cpp` |
 
 ## Puntos de personalización del framework
 

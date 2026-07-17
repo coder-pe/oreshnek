@@ -69,7 +69,11 @@ cmake -B build -DORESHNEK_WITH_SQLITE=ON
 cmake --build build
 ```
 
-El ejecutable `oreshnek_server` se encontrará en el directorio `build/`.
+La compilación produce la **librería** `oreshnek` (el framework). Los programas
+ejecutables viven fuera del núcleo: demos en `examples/` (p.ej.
+`build/examples/07_config_server`, un servidor completo dirigido por
+configuración) y aplicaciones en `apps/` (p.ej. `apps/fileapi`, activable con
+`-DORESHNEK_BUILD_APPS=ON`). El árbol `src/` contiene **solo código de librería**.
 
 #### Opciones de compilación
 
@@ -78,6 +82,7 @@ El ejecutable `oreshnek_server` se encontrará en el directorio `build/`.
 | `ORESHNEK_CXX_STANDARD` | `20` | Estándar de C++ a usar (`17` o `20`). Usa `17` si el compilador del servidor no soporta C++20. |
 | `ORESHNEK_BUILD_TESTS` | `ON` | Compila la suite de tests. |
 | `ORESHNEK_BUILD_EXAMPLES` | `ON` | Compila los ejemplos de `examples/`. |
+| `ORESHNEK_BUILD_APPS` | `OFF` | Compila las aplicaciones de `apps/` (p.ej. `fileapi`). |
 | `ORESHNEK_ASAN` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer. |
 | `ORESHNEK_TSAN` | `OFF` | ThreadSanitizer (mutuamente excluyente con ASan). |
 | `ORESHNEK_WITH_SQLITE` | `OFF` | Backend SQLite3. |
@@ -112,8 +117,8 @@ cmake -B build -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_CXX_STANDARD=17
 Detalles de cada backend (config, límites, pool de conexiones) en
 [`docs/DATABASE.md`](docs/DATABASE.md).
 
-La compilación produce una librería estática `oreshnek` (el framework) y el
-ejecutable de ejemplo `oreshnek_server`.
+La compilación produce una librería estática `oreshnek` (el framework); los
+ejecutables de demostración están en `examples/` y las aplicaciones en `apps/`.
 
 ### 2. Uso Básico
 
@@ -152,10 +157,10 @@ int main() {
 
 ### 3. Ejecutar el Servidor
 
-Para ejecutar el servidor de ejemplo compilado:
+Para ejecutar el servidor de demostración (dirigido por configuración) compilado:
 
 ```bash
-./build/oreshnek_server
+./build/examples/07_config_server
 ```
 
 El servidor estará escuchando en `http://localhost:8080`. Puedes probar la ruta principal con `curl`:

@@ -90,8 +90,9 @@ cmake --build build-fuzz --target fuzz_http_parser
 ### B.1 Andamiaje
 
 - `tools/loadtest/` con:
-  - `run.sh <url> [--soak]`: lanza `oreshnek_server` con una config de carga
-    conocida, espera a `/health`, corre los escenarios wrk y vuelca resultados.
+  - `run.sh <url> [--soak]`: lanza el servidor de demo
+    (`examples/07_config_server`) con una config de carga conocida, espera a
+    `/health`, corre los escenarios wrk y vuelca resultados.
   - Scripts Lua wrk: `get_json.lua` (JSON pequeño, camino caliente),
     `keepalive.lua` (reutilización de conexión), `pipeline.lua` (pipelining),
     `static.lua` (fichero estático vía `sendfile`).
