@@ -1,0 +1,35 @@
+{
+  "host": "0.0.0.0",
+  "port": 8443,
+  "thread_pool_size": 4,
+
+  "upload_dir": "./storage/",
+
+  "read_timeout_sec": 0,
+  "write_timeout_sec": 30,
+  "idle_timeout_sec": 60,
+  "shutdown_grace_sec": 10,
+  "handler_timeout_sec": 0,
+
+  "log_level": "info",
+  "log_file": "",
+
+  "tls": {
+    "enabled": true,
+    "cert_file": "./certs/server.crt",
+    "key_file": "./certs/server.key",
+    "min_version": "1.2"
+  },
+
+  "upload": {
+    "enabled": true,
+    "spool_dir": "./spool",
+    "stream_threshold_bytes": 65536,
+    "max_upload_bytes": 0
+  },
+
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics"
+  }
+}

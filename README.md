@@ -31,6 +31,7 @@ Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado pa
 *   **Compresión:** `gzip` (zlib) y `brotli` opcional, negociados por `Accept-Encoding`, para texto/JSON/manifiestos (nunca ficheros/video).
 *   **Procesamiento de JSON:** Usa [nlohmann/json](https://github.com/nlohmann/json) como motor JSON.
 *   **Subidas multipart:** Parser `multipart/form-data` integrado (`Http::Multipart`).
+*   **Subidas grandes (streaming a disco):** cuerpos con `Content-Length` por encima de un umbral se derraman directo a un fichero temporal según llegan (memoria constante), y el handler recibe su ruta vía `HttpRequest::body_file()` — sin el tope de ~1 MiB del buffer de lectura. `Server::enable_upload_streaming` / sección `upload`. App de referencia: [`apps/fileapi`](apps/fileapi/README.md).
 *   **TLS/HTTPS:** Opcional sobre OpenSSL con handshake no bloqueante.
 *   **Middleware:** Cadena encadenable con short-circuit (CORS, logging, JWT, propios).
 *   **Bases de datos:** Gateway SQL **genérico y agnóstico del dominio** (`query`/`exec` parametrizado, filas genéricas); el framework no impone modelos. Abstracción sin `virtual` (CRTP) con backends **SQLite**, **PostgreSQL** (libpq) y **Oracle** (OCI), seleccionables por configuración. Cada backend es **opt-in en compilación** (`ORESHNEK_WITH_SQLITE` / `_POSTGRES` / `_ORACLE`): el build solo depende del cliente que el proyecto realmente use.

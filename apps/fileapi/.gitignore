@@ -1,0 +1,5 @@
+# Runtime artifacts (never commit certs, uploads or spooled temp files)
+certs/
+storage/
+spool/
+*.log

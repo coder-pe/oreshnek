@@ -23,6 +23,7 @@ option(ORESHNEK_ASAN  "Build with AddressSanitizer + UndefinedBehaviorSanitizer"
 option(ORESHNEK_TSAN  "Build with ThreadSanitizer" OFF)
 option(ORESHNEK_BUILD_TESTS "Build the test suite" ON)
 option(ORESHNEK_BUILD_EXAMPLES "Build the example programs (examples/)" ON)
+option(ORESHNEK_BUILD_APPS "Build the standalone applications (apps/)" OFF)
 option(ORESHNEK_FUZZ "Build libFuzzer fuzz targets (needs a libFuzzer-capable clang)" OFF)
 
 # Database backends are opt-in: enable only the one(s) a given project actually
@@ -211,6 +212,13 @@ target_compile_options(oreshnek_server PRIVATE -Wall -Wextra -pedantic)
 # --- Examples ----------------------------------------------------------------
 if(ORESHNEK_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+# --- Applications ------------------------------------------------------------
+# Standalone apps built on the framework (each in its own directory with its own
+# CMakeLists linking the oreshnek library).
+if(ORESHNEK_BUILD_APPS)
+    add_subdirectory(apps/fileapi)
 endif()
 
 # --- Tests -------------------------------------------------------------------
