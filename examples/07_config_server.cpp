@@ -1,11 +1,15 @@
-// src/main.cpp
+// examples/07_config_server.cpp
 //
-// oreshnek_server: a small, *general-purpose* demo of the framework. It wires up
-// configuration, logging, TLS/rate-limiting/metrics/compression and a couple of
-// representative routes — a generic "notes" resource over the database gateway
-// plus static file serving. It is intentionally domain-agnostic; for a worked
-// application (a video platform built on these same primitives) see
-// examples/06_video_platform.cpp.
+// Use case: a full server driven entirely by an external JSON config file
+// (oreshnek.json). Wires up configuration, logging, and every production feature
+// together — TLS, rate limiting, metrics, compression — plus a couple of generic
+// routes (a "notes" resource over the database gateway and static file serving).
+// It is intentionally domain-agnostic; for a worked application (a video platform
+// on the same primitives) see 06_video_platform.cpp, and for a real HTTPS app see
+// apps/fileapi.
+//
+// This is the demo that used to live in src/main.cpp (the `oreshnek_server`
+// binary): the framework's src/ tree now holds only library code.
 
 #include "oreshnek/Oreshnek.h"
 #include "oreshnek/server/Middleware.h"        // Built-in middlewares

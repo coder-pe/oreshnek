@@ -8,7 +8,8 @@ set(ORESHNEK_EXAMPLES
     03_rest_crud_db
     04_static_files
     05_production
-    06_video_platform)
+    06_video_platform
+    07_config_server)
 
 foreach(example ${ORESHNEK_EXAMPLES})
     add_executable(${example} ${example}.cpp)

@@ -9,6 +9,11 @@
 // the framework's generic SqlResult rows into its own structs. That is the whole
 // point: Oreshnek is general-purpose; "video streaming" is just one app.
 //
+// A sample web frontend for this domain (the "Video Tutorial Platform" UI) lives
+// in examples/06_video_platform_web/ — static HTML/JS/CSS you can serve from any
+// static file server (or via examples/07_config_server with static_dir pointing
+// at it). It is illustrative reference material, not wired into this API.
+//
 //   curl -d '{"username":"edgar","email":"e@x.io","password":"s3cret","role":"creator"}' \
 //        localhost:8080/api/register
 //   TOKEN=$(curl -s -d '{"username":"edgar","password":"s3cret"}' \
