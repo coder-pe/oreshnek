@@ -40,8 +40,8 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
 
 ## Directory traversal
 
-- Las rutas servidas desde disco (`/static/:file_path`, `/video/:filename`) se
-  resuelven con `resolve_within_dir()`, que usa
+- Las rutas servidas desde disco (`/static/:file_path` en el demo, `/files/:name`
+  en `apps/fileapi`) se resuelven con un helper `resolve_within()`, que usa
   `std::filesystem::weakly_canonical` y verifica que el resultado quede **dentro**
   del directorio base (con separador en el límite, evitando `/staticX`). Cualquier
   intento de escape (`..`, rutas absolutas, symlinks) devuelve `403 Forbidden`.
