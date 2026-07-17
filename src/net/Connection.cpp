@@ -1,9 +1,10 @@
 // oreshnek/src/net/Connection.cpp
 #include "oreshnek/net/Connection.h"
-#include <unistd.h> // For close, read, write
+#include <unistd.h> // For close, read, write, unlink
 #include <sys/socket.h> // For recv, send
 #include <sys/stat.h>   // For fstat
 #include <fcntl.h>      // For open
+#include <cstdlib>      // For mkstemp
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
 #include <algorithm>  // For std::min
@@ -48,6 +49,10 @@ void Connection::reset() {
     processing_ = false;
     worker_in_flight_ = false;
     continue_sent_ = false;
+    // Streaming state is already torn down at hand-off (finish_body_spool) or on
+    // abort (close_connection); reset defensively for keep-alive reuse.
+    body_mode_ = BodyMode::Buffered;
+    body_remaining_ = 0;
     clear_response_state();
     update_activity();
 }
@@ -360,6 +365,92 @@ void Connection::consume(size_t n) {
     read_buffer_fill_ -= n;
 }
 
+Http::ParseHeadersResult Connection::peek_headers(size_t& header_len,
+                                                  std::uint64_t& content_length, bool& chunked) {
+    // A throwaway parser/request over the buffered bytes: does not touch the
+    // connection's own parser or current_request_.
+    Http::HttpParser tmp;
+    Http::HttpRequest tmp_req;
+    std::string_view view(read_buffer_.data(), read_buffer_fill_);
+    Http::ParseHeadersResult r = tmp.parse_headers_only(view, header_len, tmp_req);
+    if (r == Http::ParseHeadersResult::Ready) {
+        content_length = tmp.content_length();
+        chunked = tmp.is_chunked();
+    }
+    return r;
+}
+
+bool Connection::begin_body_spool(const std::string& dir, size_t header_len,
+                                  std::uint64_t content_length) {
+    // Keep the header block so the request can be rebuilt once the body lands.
+    upload_header_bytes_.assign(read_buffer_.data(), header_len);
+
+    std::string tmpl = dir + "/upload-XXXXXX";
+    std::vector<char> path(tmpl.begin(), tmpl.end());
+    path.push_back('\0');
+    int fd = ::mkstemp(path.data());
+    if (fd < 0) {
+        ORE_LOG(ERROR) << "mkstemp failed in '" << dir << "': " << strerror(errno);
+        return false;
+    }
+    body_file_fd_ = fd;
+    body_file_path_.assign(path.data());
+    body_remaining_ = content_length;
+    body_mode_ = BodyMode::Streaming;
+
+    // Move any body bytes already buffered after the headers to the front, then
+    // spool them.
+    if (read_buffer_fill_ > header_len) {
+        size_t body_in_buf = read_buffer_fill_ - header_len;
+        std::memmove(read_buffer_.data(), read_buffer_.data() + header_len, body_in_buf);
+        read_buffer_fill_ = body_in_buf;
+    } else {
+        read_buffer_fill_ = 0;
+    }
+    return spool_from_buffer() >= 0;
+}
+
+ssize_t Connection::spool_from_buffer() {
+    if (body_mode_ != BodyMode::Streaming || body_file_fd_ < 0) return 0;
+
+    size_t to_write = static_cast<size_t>(
+        std::min<std::uint64_t>(read_buffer_fill_, body_remaining_));
+    size_t off = 0;
+    while (off < to_write) {
+        ssize_t n = ::write(body_file_fd_, read_buffer_.data() + off, to_write - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ORE_LOG(ERROR) << "write to spool file failed: " << strerror(errno);
+            return -1;
+        }
+        off += static_cast<size_t>(n);
+    }
+    body_remaining_ -= to_write;
+
+    // Preserve any surplus (a pipelined next request) at the front of the buffer.
+    size_t leftover = read_buffer_fill_ - to_write;
+    if (leftover > 0) {
+        std::memmove(read_buffer_.data(), read_buffer_.data() + to_write, leftover);
+    }
+    read_buffer_fill_ = leftover;
+    update_activity();
+    return static_cast<ssize_t>(to_write);
+}
+
+void Connection::finish_body_spool(bool keep) {
+    if (body_file_fd_ >= 0) {
+        close(body_file_fd_);
+        body_file_fd_ = -1;
+    }
+    if (!keep && !body_file_path_.empty()) {
+        ::unlink(body_file_path_.c_str());
+    }
+    body_file_path_.clear();
+    body_remaining_ = 0;
+    body_mode_ = BodyMode::Buffered;
+    upload_header_bytes_.clear();
+}
+
 void Connection::maybe_send_100_continue() {
     if (continue_sent_ || socket_fd_ < 0) return;
     // Only once the headers are parsed and a body is awaited.
@@ -386,6 +477,18 @@ void Connection::close_connection() {
         close(file_fd_);
         file_fd_ = -1;
     }
+    // A spool file still owned here means the upload was aborted mid-flight
+    // (client vanished / error before hand-off): drop the partial temp file.
+    if (body_file_fd_ >= 0) {
+        close(body_file_fd_);
+        body_file_fd_ = -1;
+    }
+    if (!body_file_path_.empty()) {
+        ::unlink(body_file_path_.c_str());
+        body_file_path_.clear();
+    }
+    body_mode_ = BodyMode::Buffered;
+    body_remaining_ = 0;
     if (ssl_ != nullptr) {
         // Best-effort close_notify; SSL_set_fd uses BIO_NOCLOSE so SSL_free does
         // not close the socket (we close it ourselves below).

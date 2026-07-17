@@ -18,6 +18,14 @@ enum class ParsingState {
     ERROR
 };
 
+// Result of parse_headers_only(): the header block is incomplete, fully parsed,
+// or malformed.
+enum class ParseHeadersResult {
+    NeedMore,
+    Ready,
+    Error
+};
+
 class HttpParser {
 public:
     // Anti-DoS limits. The header block (request line + headers) must complete
@@ -37,13 +45,32 @@ public:
     // bytes_processed indicates how many bytes from raw_buffer were consumed.
     bool parse_request(std::string_view raw_buffer, size_t& bytes_processed, HttpRequest& request);
 
+    // Parse only the request line + headers (never the body), for the streaming
+    // upload path: the caller then spools the body straight to disk instead of
+    // buffering it in memory. On Ready, `header_len` is the number of bytes up to
+    // and including the blank line, the request holds method/path/headers, and
+    // content_length()/is_chunked() describe the body framing. This path does NOT
+    // enforce MAX_BODY_BYTES (large uploads are governed by the server's own
+    // max_upload_bytes); the header-size guard still applies.
+    ParseHeadersResult parse_headers_only(std::string_view raw_buffer, size_t& header_len,
+                                          HttpRequest& request);
+
     ParsingState get_state() const { return state_; }
     const std::string& get_error_message() const { return error_message_; }
+
+    // Body framing discovered while parsing headers (valid once the header block
+    // is complete): declared Content-Length, and whether Transfer-Encoding is
+    // chunked.
+    size_t content_length() const { return body_expected_length_; }
+    bool is_chunked() const { return is_chunked_; }
 
 private:
     ParsingState state_;
     size_t body_expected_length_ = 0; // From Content-Length header
     bool is_chunked_ = false; // From Transfer-Encoding header
+    // When false, parse_headers() does not reject a Content-Length above
+    // MAX_BODY_BYTES (the streaming path enforces its own limit instead).
+    bool enforce_body_limit_ = true;
     // No direct buffer management here; HttpParser works on views of an external buffer.
 
     // Helper functions for parsing

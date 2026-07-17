@@ -71,6 +71,13 @@ public:
     // Get the raw body as a string_view
     std::string_view body() const { return body_; }
 
+    // Streaming uploads: when set, the request body was spooled to this file on
+    // disk instead of being buffered in memory (body() is then empty). The
+    // handler owns the file and should move/rename it into place. See the
+    // server's upload-streaming support and examples in apps/fileapi.
+    const std::optional<std::string>& body_file() const { return body_file_; }
+    void set_body_file(std::string path) { body_file_ = std::move(path); }
+
     // Parse JSON body. Will throw if body is not valid JSON.
     nlohmann::json json() const;
 
@@ -81,6 +88,10 @@ private:
     // When non-empty, all string_views above point into this buffer instead of
     // an external socket buffer. Empty in the zero-copy hot path.
     std::string owned_storage_;
+
+    // Set for streaming uploads: filesystem path of the spooled request body.
+    // Owned (no rebasing needed), so copy/move carry it verbatim.
+    std::optional<std::string> body_file_;
 
     // Shift every view by (new_base - old_base), rebuilding the maps.
     void rebase_views(const char* old_base, const char* new_base);

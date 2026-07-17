@@ -233,6 +233,12 @@ if(ORESHNEK_BUILD_TESTS)
     add_test(NAME security_test COMMAND security_test)
     set_tests_properties(security_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
 
+    add_executable(upload_test tests/upload_test.cpp)
+    target_link_libraries(upload_test PRIVATE oreshnek oreshnek_sanitizers)
+    target_compile_options(upload_test PRIVATE -Wall -Wextra)
+    add_test(NAME upload_test COMMAND upload_test)
+    set_tests_properties(upload_test PROPERTIES ENVIRONMENT "${ORESHNEK_TEST_ENV}" TIMEOUT 60)
+
     add_executable(multipart_test tests/multipart_test.cpp)
     target_link_libraries(multipart_test PRIVATE oreshnek oreshnek_sanitizers)
     target_compile_options(multipart_test PRIVATE -Wall -Wextra)

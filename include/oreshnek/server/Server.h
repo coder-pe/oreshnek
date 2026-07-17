@@ -68,6 +68,12 @@ private:
     std::size_t compression_min_bytes_ = 256;
     bool compression_brotli_ = true;
 
+    // Streaming upload configuration (read-only after setup; used by the loop).
+    bool upload_streaming_enabled_ = false;
+    std::string upload_spool_dir_;
+    std::uint64_t upload_max_bytes_ = 0;          // 0 = unlimited.
+    std::size_t upload_stream_threshold_ = 0;     // Bodies above this stream to disk.
+
     // Middleware chain, run before the handler in registration order. Populated
     // before run() and only read (never mutated) by worker threads afterwards.
     std::vector<Middleware> middlewares_;
@@ -137,6 +143,15 @@ public:
     // above `min_bytes`. Call before listen()/run().
     void enable_compression(std::size_t min_bytes, bool allow_brotli);
 
+    // Enable streaming of large request bodies straight to disk (spooled under
+    // `spool_dir`) instead of buffering them in memory: a request whose declared
+    // Content-Length exceeds `stream_threshold_bytes` is written to a temp file
+    // as it arrives, and the handler receives its path via HttpRequest::body_file().
+    // `max_upload_bytes` (0 = unlimited) caps the accepted size (else 413). This
+    // lifts the ~1 MiB in-memory body limit for uploads. Call before listen()/run().
+    void enable_upload_streaming(const std::string& spool_dir, std::uint64_t max_upload_bytes,
+                                 std::size_t stream_threshold_bytes);
+
     // Access the live metrics (e.g. for tests).
     const Metrics& metrics() const { return metrics_; }
 
@@ -195,6 +210,15 @@ private:
     // Parse the next buffered request (if any) and hand it to a worker. At most
     // one request per connection is in flight at a time to preserve ordering.
     void dispatch_next(int fd, const std::shared_ptr<Net::Connection>& conn);
+
+    // Take an owned request and run it on a worker (middleware + handler +
+    // completion). Shared by the buffered and streaming-upload paths.
+    void dispatch_request_to_worker(int fd, const std::shared_ptr<Net::Connection>& conn,
+                                    std::shared_ptr<Http::HttpRequest> request);
+
+    // A streamed upload finished landing on disk: rebuild the request (headers +
+    // body_file path) and dispatch it to a worker.
+    void finalize_streaming_upload(int fd, const std::shared_ptr<Net::Connection>& conn);
 
     // Re-arm a connection's fd in the event multiplexer for the given direction.
     // Returns false (and closes the connection) on failure. read=true arms for

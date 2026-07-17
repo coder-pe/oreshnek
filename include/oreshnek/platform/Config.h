@@ -3,6 +3,7 @@
 #define ORESHNEK_PLATFORM_CONFIG_H
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <thread>
 
@@ -77,6 +78,15 @@ struct CompressionConfig {
     bool brotli = true;          // prefer brotli when the client accepts it
 };
 
+// Streaming of large request bodies straight to disk (instead of buffering them
+// in the ~1 MiB read buffer). See Server::enable_upload_streaming.
+struct UploadConfig {
+    bool enabled = false;
+    std::string spool_dir = "./spool";           // temp files while an upload lands
+    std::size_t stream_threshold_bytes = 65536;  // bodies above this stream to disk
+    std::uint64_t max_upload_bytes = 0;          // 0 = unlimited; else 413 above it
+};
+
 // Runtime configuration, loadable from an external JSON file (see Config::load).
 struct ServerConfig {
     int port = 8080;
@@ -119,6 +129,9 @@ struct ServerConfig {
 
     // Response compression.
     CompressionConfig compression;
+
+    // Streaming uploads (large request bodies spooled to disk).
+    UploadConfig upload;
 
     // CORS (applied by the built-in CORS middleware when enabled).
     bool cors_enabled = false;
