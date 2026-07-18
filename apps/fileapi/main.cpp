@@ -144,26 +144,34 @@ int main(int argc, char** argv) {
     const std::string storage_dir = config.upload_dir;  // final destination folder
     fs::create_directories(storage_dir);
 
-    // HTTPS is required for this app. Fail fast with the exact command to make a
-    // self-signed certificate if it is missing (we never shell out to openssl).
-    if (!config.tls.enabled) {
-        std::cerr << "fileapi requires HTTPS. Set tls.enabled=true in " << config_path << ".\n";
-        return 1;
-    }
-    if (config.tls.cert_file.empty() || config.tls.key_file.empty() ||
-        !fs::exists(config.tls.cert_file) || !fs::exists(config.tls.key_file)) {
-        std::cerr << "TLS certificate/key not found (cert='" << config.tls.cert_file
-                  << "', key='" << config.tls.key_file << "').\n"
-                  << "Generate a self-signed pair with:\n"
-                  << "  ./tools/gen-selfsigned-cert.sh\n";
-        return 1;
+    // TLS is optional. Two supported deployments:
+    //   1) TLS terminated by fileapi itself (tls.enabled=true, cert/key set).
+    //   2) TLS terminated by a reverse proxy (nginx/Caddy) that forwards plain
+    //      HTTP to fileapi on localhost (tls.enabled=false). See README.
+    // When enabled, the certificate/key must exist — fail fast with the command
+    // to generate a self-signed pair if they are missing.
+    if (config.tls.enabled) {
+        if (config.tls.cert_file.empty() || config.tls.key_file.empty() ||
+            !fs::exists(config.tls.cert_file) || !fs::exists(config.tls.key_file)) {
+            std::cerr << "TLS is enabled but the certificate/key was not found (cert='"
+                      << config.tls.cert_file << "', key='" << config.tls.key_file << "').\n"
+                      << "Generate a self-signed pair with:\n"
+                      << "  ./tools/gen-selfsigned-cert.sh\n"
+                      << "or point tls.cert_file/tls.key_file at real certificates (see README).\n";
+            return 1;
+        }
+    } else {
+        ORE_LOG(WARN) << "TLS is disabled: serving plain HTTP. Only safe behind a "
+                         "TLS-terminating reverse proxy (nginx/Caddy) on a trusted network.";
     }
 
     Server::Server server(static_cast<size_t>(config.thread_pool_size));
     server.configure(Server::Server::Settings{
         config.read_timeout_sec, config.write_timeout_sec, config.idle_timeout_sec,
         config.shutdown_grace_sec, config.handler_timeout_sec, config.max_concurrent_handlers});
-    server.enable_tls(config.tls.cert_file, config.tls.key_file, config.tls.min_version);
+    if (config.tls.enabled) {
+        server.enable_tls(config.tls.cert_file, config.tls.key_file, config.tls.min_version);
+    }
 
     // Stream large uploads straight to disk (this is the whole point of the app),
     // using the configured spool dir / threshold / cap.
@@ -248,7 +256,8 @@ int main(int argc, char** argv) {
         res.status(Http::HttpStatus::OK).json({{"deleted", name}});
     });
 
-    ORE_LOG(INFO) << "fileapi listening on https://" << config.host << ":" << config.port
+    ORE_LOG(INFO) << "fileapi listening on " << (config.tls.enabled ? "https://" : "http://")
+                  << config.host << ":" << config.port
                   << " (storage '" << storage_dir << "')";
     if (!server.listen(config.host, config.port)) {
         std::cerr << "Failed to start server\n";

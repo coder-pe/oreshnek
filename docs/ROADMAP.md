@@ -147,6 +147,12 @@ backend ligero (dev/tests/embebido). Diseño detallado en
   `Accept-Encoding`; solo cuerpos de texto compresibles (JSON/HTML/manifiestos),
   nunca ficheros/video. `compression.*` por config. Test `compression_test`.
 - ⬜ (Opcional) HTTP/2 (`nghttp2`).
+- ⬜ (Opcional) **kernel TLS (kTLS)** — OpenSSL 3 + `SSL_OP_ENABLE_KTLS` para que
+  `sendfile()` funcione **bajo TLS** (hoy, con TLS terminado por el framework, las
+  descargas de fichero caen a `pread`+`SSL_write`, sin zero-copy). Habilitaría
+  descargas zero-copy cuando es el propio servidor el que termina TLS, en vez de
+  delegar la terminación a un reverse proxy. Ver
+  [`apps/fileapi/README.md`](../apps/fileapi/README.md) (Opción A vs B).
 
 ## Fase 7 — Tiempo real y streaming ⬜ (siguiente)
 
