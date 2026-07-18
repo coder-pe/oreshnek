@@ -126,6 +126,33 @@ fileapi entonces con `tls.enabled=false` y `host` en localhost:
 { "host": "127.0.0.1", "port": 8443, "tls": { "enabled": false }, ... }
 ```
 
+### Zero-copy (`sendfile`): por qué la Opción A es mejor para descargas
+
+El framework sirve ficheros con `sendfile()` **zero-copy**, pero **solo en HTTP
+plano**. Cuando TLS lo termina *el propio fileapi* (Opción B), `sendfile` no puede
+cifrar, así que el código cae a `pread()` + `SSL_write()` (una copia en espacio de
+usuario) — ver `src/net/Connection.cpp` (ruta con TLS vs. ruta `sendfile`). Es una
+limitación de OpenSSL en userspace, no de Oreshnek: **TLS y `sendfile` son
+incompatibles sin kernel TLS (kTLS)**.
+
+Consecuencia, al revés de lo que parece:
+
+| | Descarga de fichero | `sendfile` zero-copy |
+|---|---|---|
+| **Opción A** (nginx TLS, fileapi HTTP) | disco → `sendfile` → loopback → nginx cifra → cliente | ✅ **sí**, en el salto fileapi→nginx (nginx moderno puede además usar kTLS+sendfile hacia el cliente) |
+| **Opción B** (fileapi TLS) | disco → `pread` → OpenSSL cifra → `SSL_write` | ❌ **no** (TLS desactiva `sendfile`) |
+
+Es decir, **la Opción B *pierde* el zero-copy**, no lo conserva; la **Opción A lo
+preserva** del lado de fileapi. El cifrado cuesta un paso sobre los datos en ambas
+(inevitable sin kTLS); la diferencia es que en A lo paga nginx (muy optimizado) y
+fileapi mantiene su `sendfile`.
+
+> **Para tener `sendfile` bajo TLS en la Opción B haría falta implementar kTLS**
+> (OpenSSL 3 + `SSL_OP_ENABLE_KTLS`), que **actualmente no está implementado** en
+> el framework (anotado como trabajo futuro). Hasta entonces, si te importa el
+> zero-copy en descargas, usa la **Opción A**. Nota: las **subidas** no son
+> zero-copy en ninguna opción (se leen del socket y se escriben a disco).
+
 ### Opción B — fileapi termina TLS con el certificado de Let's Encrypt
 
 La app lee directamente los PEM que emite certbot.
