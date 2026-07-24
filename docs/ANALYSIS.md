@@ -118,3 +118,12 @@ tools/analyze.sh   # incluye clang-tidy si está instalado
 
 Todo el desarrollo del framework mantiene este gate en verde; aplica el mismo
 estándar a tu aplicación.
+
+## Fuzzing y carga (evidencia para el indicador de producción)
+
+Este gate cubre memoria/concurrencia/recursos/seguridad estática, pero **no**
+sustituye al fuzzing del parser HTTP ni a una validación de carga real — son
+dos de los tres bloqueantes de producción identificados en la evaluación
+original (el tercero es CI). Diseño, estado y **cómo archivar la evidencia**
+de cada campaña/escenario (no basta con que el comando "pase" una vez sin
+dejar rastro) están en [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md).

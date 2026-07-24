@@ -1,7 +1,9 @@
 # Modelo de seguridad
 
-Estado tras la **Fase 2**. Resume las primitivas de seguridad del framework y de
-la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
+Estado tras la **Fase 6** (incluye TLS y rate limiting de fases posteriores a
+la 2, cuando se escribió la primera versión de este documento). Resume las
+primitivas de seguridad del framework y de la aplicación de ejemplo. Ver el
+progreso global en [ROADMAP.md](ROADMAP.md).
 
 ## Contraseñas
 
@@ -52,7 +54,17 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
   sin completar, el parser entra en estado de error y la conexión se cierra.
 - **Cuerpo** (`Content-Length`): ≤ 8 MiB; un valor mayor se rechaza de inmediato.
 - Nota: el cuerpo se almacena completo en el buffer de lectura (1 MiB) por
-  conexión; el streaming de cuerpos grandes llega en la Fase 3.
+  conexión; el streaming de cuerpos grandes llega en la Fase 3. Para subidas
+  por encima del umbral configurado, ver el spool a disco en la Fase 7
+  (`Server::enable_upload_streaming`, [`apps/fileapi`](../apps/fileapi/README.md)).
+- El `HttpParser` (superficie de ataque #1: es lo primero que toca bytes no
+  confiables) se fuzzea con **libFuzzer + ASan/UBSan**, con arnés de
+  invariantes (progreso garantizado, `ERROR` terminal, límites nunca
+  excedidos sin pasar a error) y replay determinista en `ctest`
+  (`fuzz_replay_test`). Detalle en
+  [`../tests/fuzz/README.md`](../tests/fuzz/README.md) y
+  [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md); una campaña larga con
+  evidencia archivada sigue pendiente (ver ese documento).
 
 ## Robustez de E/S
 
@@ -86,4 +98,8 @@ la aplicación de ejemplo. Ver el progreso global en [ROADMAP.md](ROADMAP.md).
 ## Pendiente (fases posteriores)
 
 - Cabeceras de seguridad (HSTS, X-Frame-Options) además del CORS ya disponible.
-- Compresión gzip/brotli y HTTP/2 (opcionales de Fase 6).
+- HTTP/2 (opcional de Fase 6; compresión gzip/brotli ya está implementada,
+  ver [ROADMAP.md](ROADMAP.md) Fase 6).
+- Validación de carga (wrk) y campaña larga de fuzzing con evidencia
+  archivada — dos de los tres bloqueantes de producción identificados en la
+  evaluación; plan y estado en [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md).

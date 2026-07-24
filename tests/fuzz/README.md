@@ -30,9 +30,40 @@ cmake --build build-fuzz --target fuzz_http_parser
 ./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
 ```
 
-En Linux basta el `clang` del sistema. Un crash deja un fichero `crash-*`:
-cópialo a `tests/fuzz/regressions/` y confirma que `fuzz_replay_test` lo
-reproduce (idealmente tras corregir el parser).
+En Linux basta el `clang` del sistema, siempre que su `compiler-rt` incluya el
+runtime de fuzzer:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y clang
+
+# Fedora / RHEL / CentOS Stream
+sudo dnf install -y clang compiler-rt
+
+# Arch Linux
+sudo pacman -S --needed clang compiler-rt
+
+cmake -B build-fuzz -DORESHNEK_FUZZ=ON
+cmake --build build-fuzz --target fuzz_http_parser
+```
+
+Verifica antes de una campaña larga que el runtime está presente
+(`find / -name 'libclang_rt.fuzzer*' 2>/dev/null`); si no aparece nada, falta
+el paquete `compiler-rt`/`libclang-rt-<ver>-dev` de tu distro. Lista completa
+de dependencias por sistema operativo: [`docs/DEPENDENCIES.md`](../../docs/DEPENDENCIES.md).
+
+Un crash deja un fichero `crash-*`: cópialo a `tests/fuzz/regressions/` y
+confirma que `fuzz_replay_test` lo reproduce (idealmente tras corregir el
+parser).
+
+## Archivar una campaña (evidencia, no solo "pasó")
+
+Para que una corrida cuente como evidencia del criterio de aceptación A.5.2
+(≥5 min sin crash/leak/UB) hay que archivar su salida cruda, no solo anotar
+que pasó. Procedimiento y formato en
+[`campaigns/README.md`](campaigns/README.md); el resumen legible de cada
+campaña archivada va en la tabla de "Estado actual" de
+[`docs/LOAD_AND_FUZZ_PLAN.md`](../../docs/LOAD_AND_FUZZ_PLAN.md).
 
 ## Replay determinista (ctest)
 
