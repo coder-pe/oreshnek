@@ -60,7 +60,8 @@ if have clang-tidy; then
     # shellcheck disable=SC2086
     clang-tidy -p build $files || { echo "clang-tidy: findings (see above)"; }
 else
-    echo "skipped — install with: brew install llvm   (or: apt-get install clang-tidy)"
+    echo "skipped — install: brew install llvm | apt-get install clang-tidy | dnf install clang-tools-extra | pacman -S clang"
+    echo "full per-OS dependency list: docs/DEPENDENCIES.md"
 fi
 
 # --- cppcheck -----------------------------------------------------------------
@@ -69,7 +70,7 @@ if have cppcheck; then
     cppcheck --enable=warning,performance,portability --std=c++20 --quiet \
              --suppress=missingIncludeSystem -I include src || true
 else
-    echo "skipped — install with: brew install cppcheck   (or: apt-get install cppcheck)"
+    echo "skipped — install: brew install cppcheck | apt-get install cppcheck | dnf install cppcheck | pacman -S cppcheck"
 fi
 
 # --- valgrind (memory + fd leaks) — Linux only --------------------------------

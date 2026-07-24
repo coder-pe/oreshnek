@@ -13,9 +13,11 @@ Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado pa
 > [`docs/ROADMAP.md`](docs/ROADMAP.md).
 >
 > **Recursos:** [ejemplos de referencia](examples/README.md) ·
+> [dependencias por sistema operativo](docs/DEPENDENCIES.md) ·
 > [análisis y apps optimizadas](docs/ANALYSIS.md) ·
 > [arquitectura](docs/ARCHITECTURE.md) · [seguridad](docs/SECURITY.md) ·
 > [persistencia/BD](docs/DATABASE.md) ·
+> [plan de carga y fuzzing](docs/LOAD_AND_FUZZ_PLAN.md) ·
 > [comparativa con Drogon](docs/COMPARISON_DROGON.md) ·
 > [changelog](CHANGELOG.md) ·
 > [licencia](LICENSE) · [licencia comercial](COMMERCIAL.md).
@@ -50,6 +52,11 @@ Para compilar y ejecutar un proyecto con Oreshnek, necesitarás:
     SQLite3, `libpq` (PostgreSQL) o el Instant Client SDK de Oracle (OCI).
 *   zlib (gzip); brotli **opcional** (Content-Encoding: br, autodetectado).
 *   nlohmann/json (vendorizado en `nlohmann_json/`, o un paquete del sistema).
+
+Comandos de instalación de todo lo anterior (más lo necesario para pruebas de
+carga con `wrk` y fuzzing con libFuzzer) para **macOS, Debian/Ubuntu,
+Fedora/RHEL/CentOS Stream y Arch Linux** están en
+[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
 ## Cómo Empezar
 
