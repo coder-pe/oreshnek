@@ -293,6 +293,11 @@ Los tres backends son **opcionales en CMake** y **ninguno está activo por
 defecto**: hay que habilitar explícitamente el (los) que el proyecto necesite,
 o la configuración de CMake falla con un `FATAL_ERROR`.
 
+Cada backend necesita sus headers/librería de cliente instalados a nivel de
+sistema operativo antes de configurar CMake (`sqlite3`, `libpq`, o el Instant
+Client de Oracle). Comandos de instalación para macOS, Debian/Ubuntu,
+Fedora/RHEL/CentOS Stream y Arch Linux: [`docs/DEPENDENCIES.md`](DEPENDENCIES.md).
+
 | Opción CMake | Por defecto | Efecto |
 |--------------|-------------|--------|
 | `ORESHNEK_WITH_SQLITE`   | `OFF` | `find_package(SQLite3 REQUIRED)`, compila `SqliteBackend`/`SqlitePool`, define `ORESHNEK_WITH_SQLITE`. |

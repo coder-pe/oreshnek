@@ -175,11 +175,16 @@ delegan a infraestructura especializada.
 - ⬜ **Streaming de respuesta sin buffer completo** — generar el cuerpo por trozos
   (chunked) desde el handler y poder retener una petición (long-poll); requisito
   de LL-HLS.
-- 🔄 **Fuzzing del parser** (libFuzzer + ASan/UBSan): target `fuzz_http_parser`
-  con arnés de invariantes (dos modos: una-pasada e incremental estilo
-  `Connection::parse_next`), corpus semilla y replay determinista
-  `fuzz_replay_test` en `ctest` (protege regresiones sin libFuzzer, p.ej. Apple
-  clang). Ver [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md) y
-  [`../tests/fuzz/README.md`](../tests/fuzz/README.md).
+- ✅ **Fuzzing del parser — harness** (libFuzzer + ASan/UBSan): target
+  `fuzz_http_parser` con arnés de invariantes (dos modos: una-pasada e
+  incremental estilo `Connection::parse_next`), corpus semilla y replay
+  determinista `fuzz_replay_test` en `ctest` (protege regresiones sin
+  libFuzzer, p.ej. Apple clang). Ver [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md)
+  y [`../tests/fuzz/README.md`](../tests/fuzz/README.md).
+- ⬜ **Fuzzing del parser — campaña larga documentada**: correr ≥5 min sin
+  crash/leak/UB y archivar el log en `tests/fuzz/campaigns/` (criterio A.5.2
+  de `LOAD_AND_FUZZ_PLAN.md`). El harness ya está listo; falta ejecutarla y
+  archivar la evidencia.
 - ⬜ Benchmarks / validación de carga (wrk) — línea base reproducible + soak.
+  Diseño en `LOAD_AND_FUZZ_PLAN.md` (Parte B); nada implementado todavía.
 - ⬜ Comparación con terceros tipo TechEmpower (fase posterior).
