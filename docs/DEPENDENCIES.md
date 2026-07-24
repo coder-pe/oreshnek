@@ -7,6 +7,13 @@ correr la campaña de fuzzing de [`docs/LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PL
 análisis opcionales de `tools/analyze.sh`. Windows no es una plataforma
 objetivo por ahora (el framework usa `epoll`/`kqueue`) y queda fuera.
 
+Si vas a correr fuzzing y carga en un **VPS Ubuntu/Debian** (el caso más
+común para esto), [`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md)
+encadena los comandos de instalación de abajo con los pasos de compilación y
+ejecución completos, de punta a punta. Este documento (`DEPENDENCIES.md`) es
+la referencia de *qué instalar* por SO; ese otro es la guía de *qué hacer*
+específica para Ubuntu/Debian.
+
 Nada de esto se enlaza en la librería `oreshnek` salvo lo listado en
 "Compilación del framework" — `wrk`, el LLVM de fuzzing y las herramientas de
 análisis son andamiaje externo de test/CI, no dependencias del árbol
