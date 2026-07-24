@@ -11,13 +11,18 @@ ejecutada con su salida archivada sí lo es.
 
 Herramientas acordadas: **wrk** para carga, **libFuzzer + ASan/UBSan** para fuzz.
 
+**¿Vas a correr esto en un VPS Linux (Ubuntu/Debian)?** Usa
+[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md) — guía
+paso a paso copiable de punta a punta para esa plataforma específica; lo que
+sigue aquí es el diseño y la referencia general (incluye macOS).
+
 ## Estado actual
 
 | Parte | Estado | Detalle |
 |---|---|---|
 | A — Harness de fuzzing | ✅ Implementado | `tests/fuzz/` (harness, corpus, replay determinista en `ctest`); commit `c271ee8`. |
 | A — Campaña larga + evidencia archivada | ⬜ Pendiente | El harness compila y el replay del corpus semilla pasa en `ctest`, pero no hay registro de una campaña extendida (criterio A.5.2). Ver "Recolección y documentación de resultados". |
-| B — Andamiaje de carga (`tools/loadtest/`) | ⬜ Pendiente | No implementado; nada en `tools/` además de `analyze.sh`. |
+| B — Andamiaje de carga automatizado (`run.sh`) | ⬜ Pendiente | `run.sh`/scripts Lua no existen. Mientras tanto, los escenarios se corren a mano — ver [`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md). |
 | B — Línea base documentada | ⬜ Pendiente | Depende de B.1. |
 | CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
 
@@ -107,12 +112,25 @@ campaña larga y archivar su evidencia (ver más abajo).
 ### A.4 Ejecución y CI
 
 ```bash
-# Local (macOS), campaña corta:
+# macOS, campaña corta (LLVM de Homebrew, ver docs/DEPENDENCIES.md):
 cmake -B build-fuzz -DORESHNEK_FUZZ=ON \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
 cmake --build build-fuzz --target fuzz_http_parser
 ./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
 ```
+
+```bash
+# Linux (Ubuntu/Debian, clang del sistema — sin LLVM externo necesario):
+cmake -B build-fuzz -DORESHNEK_FUZZ=ON -DORESHNEK_WITH_SQLITE=ON \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build-fuzz --target fuzz_http_parser
+./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
+```
+
+Guía completa paso a paso para un VPS Ubuntu/Debian (dependencias, verificar
+el runtime de libFuzzer, campaña larga con evidencia archivada, y la prueba
+de carga de la Parte B) en
+[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md).
 
 - CI (Linux, clang del sistema): job de fuzz corto (p.ej. 120 s) por PR +
   campaña larga programada (nightly, minimizando corpus). Cualquier crash →
@@ -133,9 +151,12 @@ cmake --build build-fuzz --target fuzz_http_parser
 
 ## Parte B — Validación de carga (wrk)
 
-**Estado: ⬜ pendiente.** Nada de lo descrito abajo está implementado todavía
-(no existe `tools/loadtest/`); esta sección sigue siendo el diseño a construir,
-no una descripción de algo ya hecho.
+**Estado: ⬜ pendiente el andamiaje automatizado.** El `run.sh`/scripts Lua
+descritos abajo no existen todavía; esta sección sigue siendo el diseño a
+construir, no una descripción de algo ya hecho. Mientras tanto, los mismos
+escenarios se pueden correr **manualmente** con `wrk` directo — ver
+[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md) (Ubuntu/
+Debian) y [`tools/loadtest/README.md`](../tools/loadtest/README.md).
 
 ### B.1 Andamiaje
 
@@ -237,22 +258,32 @@ mkdir -p tests/fuzz/campaigns
   exista al menos una corrida ≥5 min limpia, esa línea pasa de ⬜ a ✅ en la
   tabla de "Estado actual" (con el nombre de fichero como referencia).
 
-### Carga (Parte B, una vez implementada `tools/loadtest/`)
+### Carga (Parte B)
+
+El andamiaje automatizado (`run.sh` + scripts Lua) no existe todavía; la
+versión manual —ejecutable ya mismo— con estos mismos comandos, aplicada paso
+a paso contra `examples/07_config_server`, está en
+[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md) (Paso 4).
+Resumen del patrón (rutas relativas a `tools/loadtest/results/`, que ya
+existe en el repo):
 
 ```bash
 # Snapshot de /metrics antes y después de cada escenario (formato Prometheus,
 # texto plano — diff directo con `diff`).
-curl -s http://localhost:8080/metrics > "results/<escenario>-antes.prom"
+curl -s http://localhost:8080/metrics > "tools/loadtest/results/<escenario>-antes.prom"
 
-# wrk con salida completa archivada (no solo el resumen de consola).
-wrk -t4 -c200 -d60s -s tools/loadtest/get_json.lua http://localhost:8080/ \
-    2>&1 | tee "results/<escenario>-$(date +%Y%m%d).log"
+# wrk con salida completa archivada (no solo el resumen de consola). Sin -s,
+# wrk hace GET simple al URL — suficiente para los escenarios 1 y 2 de B.3;
+# los scripts Lua (get_json.lua, pipeline.lua, ...) quedan para cuando exista
+# el andamiaje automatizado.
+wrk -t4 -c200 -d60s http://localhost:8080/ \
+    2>&1 | tee "tools/loadtest/results/<escenario>-$(date +%Y%m%d).log"
 
-curl -s http://localhost:8080/metrics > "results/<escenario>-despues.prom"
+curl -s http://localhost:8080/metrics > "tools/loadtest/results/<escenario>-despues.prom"
 
 # RSS durante el soak: muestreo periódico a un CSV (timestamp,rss_kb).
 while kill -0 "$SERVER_PID" 2>/dev/null; do
-    printf '%s,%s\n' "$(date +%s)" "$(ps -o rss= -p "$SERVER_PID")" >> results/soak-rss.csv
+    printf '%s,%s\n' "$(date +%s)" "$(ps -o rss= -p "$SERVER_PID")" >> tools/loadtest/results/soak-rss.csv
     sleep 30
 done
 ```
@@ -274,12 +305,14 @@ done
 
 ### Dónde vive la evidencia
 
-- `tests/fuzz/campaigns/*.log` — corridas de fuzzing (nuevo directorio, git-
-  tracked; los logs son texto plano y pequeños).
-- `tools/loadtest/results/` (una vez exista Parte B) — logs de wrk, snapshots
-  de `/metrics` y CSV de RSS. Si algún artefacto es demasiado grande para el
-  repo, se resume aquí y el crudo se adjunta como artefacto de CI/release en
-  vez de commitearse.
+- `tests/fuzz/campaigns/*.log` — corridas de fuzzing (git-tracked; los logs
+  son texto plano y pequeños).
+- `tools/loadtest/results/` — logs de wrk, snapshots de `/metrics` y CSV de
+  RSS (el directorio ya existe; el andamiaje que lo llenaría automáticamente
+  no, así que hoy se llena a mano siguiendo
+  [`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md)). Si algún
+  artefacto es demasiado grande para el repo, se resume aquí y el crudo se
+  adjunta como artefacto de CI/release en vez de commitearse.
 - Resúmenes legibles (no el log crudo) van en este documento y en
   [`docs/ANALYSIS.md`](ANALYSIS.md), que ya es el punto de referencia para
   "cómo verificar y endurecer una app Oreshnek".

@@ -1,0 +1,65 @@
+{
+  "_comment": "Config para pruebas de carga (wrk) contra examples/07_config_server. NO usar en produccion: JWT secret de ejemplo, rate limiting deshabilitado a proposito para medir el techo real del servidor. Ver docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md.",
+
+  "host": "0.0.0.0",
+  "port": 8080,
+  "thread_pool_size": 8,
+  "max_connections": 4096,
+
+  "upload_dir": "./uploads/",
+  "static_dir": "./static/",
+  "max_file_size": 524288000,
+
+  "jwt_secret": "loadtest-only-not-for-production",
+  "jwt_expire_hours": 24,
+
+  "read_timeout_sec": 30,
+  "write_timeout_sec": 30,
+  "idle_timeout_sec": 60,
+  "shutdown_grace_sec": 10,
+  "handler_timeout_sec": 30,
+  "max_concurrent_handlers": 0,
+
+  "_comment_log": "warn en vez de info: el logging por peticion (request_logger) es un sesgo evitable al medir throughput.",
+  "log_level": "warn",
+  "log_file": "",
+  "log_max_bytes": 10485760,
+  "log_max_files": 5,
+
+  "db": {
+    "backend": "sqlite",
+    "sqlite": {
+      "path": "./database.db",
+      "pool_size": 8,
+      "busy_timeout_ms": 5000
+    }
+  },
+
+  "tls": {
+    "enabled": false,
+    "cert_file": "",
+    "key_file": "",
+    "min_version": "1.2"
+  },
+
+  "_comment_rate_limit": "Deshabilitado para medir el techo real del servidor (escenarios 1-3 de LOAD_AND_FUZZ_PLAN.md B.3). Para el escenario de saturacion/load-shedding, cambia enabled a true con un requests_per_second bajo y confirma que el servidor responde 503 en vez de degradarse.",
+  "rate_limit": {
+    "enabled": false,
+    "requests_per_second": 50,
+    "burst": 100
+  },
+
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics"
+  },
+
+  "compression": {
+    "enabled": true,
+    "min_bytes": 256,
+    "brotli": true
+  },
+
+  "cors_enabled": false,
+  "cors_allow_origin": "*"
+}
