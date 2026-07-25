@@ -2,12 +2,13 @@
 
 Cierre de dos de los tres bloqueantes de producción identificados en la
 evaluación: (1) el claim de "alto rendimiento" (README) no está medido y (2) el
-`HttpParser` —superficie de ataque #1— no está fuzzeado. El tercer bloqueante,
-CI, queda fuera de este documento (ver "Qué desbloquea el indicador de
-producción" más abajo). Este documento define qué construir, cómo, los
-criterios de aceptación, y **cómo se documenta la evidencia** de que cada
-criterio se cumplió — un harness que compila no es evidencia; una campaña
-ejecutada con su salida archivada sí lo es.
+`HttpParser` —superficie de ataque #1— no está fuzzeado. El bloqueante (2) ya
+está cerrado (ver "Estado actual"); el (1) sigue abierto. El tercer
+bloqueante, CI, queda fuera de este documento (ver "Qué desbloquea el
+indicador de producción" más abajo). Este documento define qué construir,
+cómo, los criterios de aceptación, y **cómo se documenta la evidencia** de
+que cada criterio se cumplió — un harness que compila no es evidencia; una
+campaña ejecutada con su salida archivada sí lo es.
 
 Herramientas acordadas: **wrk** para carga, **libFuzzer + ASan/UBSan** para fuzz.
 
@@ -21,7 +22,7 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 | Parte | Estado | Detalle |
 |---|---|---|
 | A — Harness de fuzzing | ✅ Implementado | `tests/fuzz/` (harness, corpus, replay determinista en `ctest`); commit `c271ee8`. |
-| A — Campaña larga + evidencia archivada | ⬜ Pendiente | El harness compila y el replay del corpus semilla pasa en `ctest`, pero no hay registro de una campaña extendida (criterio A.5.2). Ver "Recolección y documentación de resultados". |
+| A — Campaña larga + evidencia archivada | ✅ Cerrado | Debian 13 (VPS), campaña de 30 min: **3 033 053 ejecuciones**, ~1684 exec/s, `new_units_added: 1449`, `peak_rss_mb: 525`, 0 crashes/leaks/UB (`grep` de patrones de sanitizer sobre el log completo → "limpio"). También se corrió una previa de 5 min, limpia igual (su log no quedó archivado por separado: ver nota abajo). Log: `tests/fuzz/campaigns/20260725-4c443e1.log`. |
 | B — Andamiaje de carga automatizado (`run.sh`) | ⬜ Pendiente | `run.sh`/scripts Lua no existen. Mientras tanto, los escenarios se corren a mano — ver [`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md). |
 | B — Línea base documentada | ⬜ Pendiente | Depende de B.1. |
 | CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
@@ -68,10 +69,10 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 
 ## Parte A — Fuzzing del `HttpParser` (libFuzzer)
 
-**Estado: ✅ harness implementado** (commit `c271ee8`). El detalle de piezas y
-cómo ejecutarlo vive ahora en [`tests/fuzz/README.md`](../tests/fuzz/README.md);
-lo que sigue documenta el diseño y sirve de referencia. Pendiente: correr una
-campaña larga y archivar su evidencia (ver más abajo).
+**Estado: ✅ completo** — harness implementado (commit `c271ee8`) y campaña
+larga con evidencia archivada (2026-07-25, ver A.5). El detalle de piezas y
+cómo ejecutarlo vive en [`tests/fuzz/README.md`](../tests/fuzz/README.md); lo
+que sigue documenta el diseño y sirve de referencia.
 
 ### A.1 Harness
 
@@ -111,12 +112,21 @@ campaña larga y archivar su evidencia (ver más abajo).
 
 ### A.4 Ejecución y CI
 
+`tests/fuzz/corpus_growth` va siempre primero en el comando: es el
+scratch **gitignored** donde libFuzzer escribe los inputs que descubre;
+`tests/fuzz/corpus` (semillas versionadas) va después y solo se lee. Pasarle
+un único directorio hace que la campaña mezcle miles de inputs nuevos con las
+semillas curadas (pasó en la primera corrida real de este plan, ver "Estado
+actual").
+
 ```bash
 # macOS, campaña corta (LLVM de Homebrew, ver docs/DEPENDENCIES.md):
 cmake -B build-fuzz -DORESHNEK_FUZZ=ON \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
 cmake --build build-fuzz --target fuzz_http_parser
-./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
+mkdir -p tests/fuzz/corpus_growth
+./build-fuzz/fuzz_http_parser -max_total_time=60 \
+    tests/fuzz/corpus_growth tests/fuzz/corpus
 ```
 
 ```bash
@@ -124,7 +134,9 @@ cmake --build build-fuzz --target fuzz_http_parser
 cmake -B build-fuzz -DORESHNEK_FUZZ=ON -DORESHNEK_WITH_SQLITE=ON \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 cmake --build build-fuzz --target fuzz_http_parser
-./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
+mkdir -p tests/fuzz/corpus_growth
+./build-fuzz/fuzz_http_parser -max_total_time=60 \
+    tests/fuzz/corpus_growth tests/fuzz/corpus
 ```
 
 Guía completa paso a paso para un VPS Ubuntu/Debian (dependencias, verificar
@@ -139,13 +151,23 @@ de carga de la Parte B) en
 ### A.5 Criterios de aceptación (Parte A)
 
 1. ✅ `fuzz_http_parser` compila y corre bajo libFuzzer+ASan+UBSan.
-2. ⬜ Campaña de ≥5 min sin crash/leak/UB partiendo del corpus semilla; si aparece
-   alguno, se corrige y su reproductor queda en `regressions/` (verde en ctest).
-   **No ejecutada/archivada todavía** — es lo que falta para poder marcar Parte
-   A como cerrada de cara al indicador de producción.
+2. ✅ Campaña de ≥5 min sin crash/leak/UB partiendo del corpus semilla.
+   **Cerrado el 2026-07-25** en un VPS Debian 13: campaña de 5 min limpia,
+   seguida de una de 30 min también limpia (3 033 053 ejecuciones, 0
+   crashes/leaks/UB). Evidencia archivada:
+   `tests/fuzz/campaigns/20260725-4c443e1.log` (la corrida de 30 min; la de 5
+   min se ejecutó primero con el mismo nombre de fichero por fecha —sin
+   hora— y quedó sobreescrita por la segunda. El propio runbook tenía ese bug
+   de nomenclatura; ya está corregido, ver A.4 y
+   [`tests/fuzz/campaigns/README.md`](../tests/fuzz/campaigns/README.md), así
+   que campañas futuras no se pisan entre sí).
 3. ✅ `fuzz_regression_test` integrado en `ctest` y verde en build normal
    (`tests/fuzz/regressions/` existe y está vacío: cero crashes conocidos
    pendientes de corregir).
+
+**Parte A: los tres criterios están cerrados.** Cierra el bloqueante de
+producción #2 (`HttpParser` fuzzeado) — ver "Qué desbloquea el indicador de
+producción" más abajo.
 
 ---
 
@@ -239,10 +261,13 @@ llevar:
 ```bash
 # Campaña con salida archivada; -print_final_stats da el resumen final
 # (execs totales, exec/s, cobertura de edges, tamaño de corpus) en stderr.
-mkdir -p tests/fuzz/campaigns
+# corpus_growth (gitignored) va primero: ahí escribe libFuzzer los inputs que
+# descubre, sin mezclarlos con las semillas versionadas de corpus/.
+mkdir -p tests/fuzz/campaigns tests/fuzz/corpus_growth
+LOG="tests/fuzz/campaigns/$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD).log"
 ./build-fuzz/fuzz_http_parser -max_total_time=300 -print_final_stats=1 \
-    tests/fuzz/corpus \
-    2>&1 | tee "tests/fuzz/campaigns/$(date +%Y%m%d)-$(git rev-parse --short HEAD).log"
+    tests/fuzz/corpus_growth tests/fuzz/corpus \
+    2>&1 | tee "$LOG"
 ```
 
 - Qué extraer del log para el criterio A.5.2: líneas `stat::number_of_executed_units`,
@@ -322,27 +347,27 @@ done
 ## Qué desbloquea el indicador de producción
 
 La evaluación original identificó **tres bloqueantes** para considerar el
-framework listo para producción. Este documento cierra el diseño de dos; el
-indicador solo pasa a "listo" cuando los tres tienen evidencia archivada y
-reproducible, no cuando el código que los ejercita simplemente compila:
+framework listo para producción. El indicador solo pasa a "listo" cuando los
+tres tienen evidencia archivada y reproducible, no cuando el código que los
+ejercita simplemente compila:
 
 | # | Bloqueante | Qué lo desbloquea | Estado |
 |---|---|---|---|
 | 1 | Claim de "alto rendimiento" no medido | Parte B implementada + línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | ⬜ Parte B ni siquiera implementada |
-| 2 | `HttpParser` no fuzzeado | Parte A implementada (✅) + al menos una campaña ≥5 min sin crash/leak/UB con su log archivado en `tests/fuzz/campaigns/` (A.5.2) | 🔄 harness listo, falta la campaña archivada |
+| 2 | `HttpParser` no fuzzeado | Parte A implementada (✅) + al menos una campaña ≥5 min sin crash/leak/UB con su log archivado en `tests/fuzz/campaigns/` (A.5.2) | ✅ **Cerrado 2026-07-25** (VPS Debian 13, campaña de 30 min, 0 crashes/leaks/UB — ver A.5) |
 | 3 | Sin CI | Pipeline (`.github/workflows/` o equivalente) que corra en cada PR: `ctest` bajo ASan/UBSan y TSan, `fuzz_replay_test`, y un job corto de fuzzing (~120 s); idealmente una corrida nightly de fuzz largo + soak de carga | ⬜ no existe |
 
-Mientras cualquiera de las tres filas esté en ⬜/🔄, el claim de "listo para
+Mientras cualquiera de las filas 1 o 3 esté en ⬜, el claim de "listo para
 producción" en el README y en `docs/ROADMAP.md` debe seguir matizado con "Fases
 0–6 completadas" (que es exacto) en vez de "producción validada" (que no lo
-es todavía).
+es todavía). La fila 2 ya no es parte de esa reserva.
 
 ---
 
 ## Orden de implementación propuesto
 
-1. ✅ **Parte A (fuzz)** — harness hecho; queda ejecutar y archivar la campaña
-   larga (A.5.2) para cerrar el bloqueante #2.
+1. ✅ **Parte A (fuzz)** — completa: harness + campaña larga archivada
+   (2026-07-25). Bloqueante #2 cerrado.
 2. **Parte B (carga)**: andamiaje `tools/loadtest/` + línea base documentada
    — siguiente paso, cierra el bloqueante #1.
 3. Integración de ambos en el pipeline de CI (job de fuzz corto por PR + soak/
