@@ -8,3 +8,13 @@ claude_expert_review_v1.md
 *.db-wal
 *.db-shm
 
+# Corpus growth written by libFuzzer during a campaign (tests/fuzz/corpus/
+# keeps only the curated seed corpus, tracked in git; new inputs the fuzzer
+# discovers go to this scratch dir instead, see docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md).
+tests/fuzz/corpus_growth/
+
+# Runtime dirs created by examples/apps when run from the repo root (e.g.
+# following docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md), not part of the source tree.
+/static/
+/uploads/
+

@@ -181,10 +181,10 @@ delegan a infraestructura especializada.
   determinista `fuzz_replay_test` en `ctest` (protege regresiones sin
   libFuzzer, p.ej. Apple clang). Ver [`LOAD_AND_FUZZ_PLAN.md`](LOAD_AND_FUZZ_PLAN.md)
   y [`../tests/fuzz/README.md`](../tests/fuzz/README.md).
-- ⬜ **Fuzzing del parser — campaña larga documentada**: correr ≥5 min sin
-  crash/leak/UB y archivar el log en `tests/fuzz/campaigns/` (criterio A.5.2
-  de `LOAD_AND_FUZZ_PLAN.md`). El harness ya está listo; falta ejecutarla y
-  archivar la evidencia.
+- ✅ **Fuzzing del parser — campaña larga documentada**: VPS Debian 13,
+  2026-07-25, campaña de 30 min (3 033 053 ejecuciones) sin crash/leak/UB,
+  log archivado en `tests/fuzz/campaigns/` (criterio A.5.2 de
+  `LOAD_AND_FUZZ_PLAN.md`, cerrado).
 - ⬜ Benchmarks / validación de carga (wrk) — línea base reproducible + soak.
   Diseño en `LOAD_AND_FUZZ_PLAN.md` (Parte B); nada implementado todavía.
 - ⬜ Comparación con terceros tipo TechEmpower (fase posterior).

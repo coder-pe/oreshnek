@@ -13,12 +13,22 @@ Plan completo en [`docs/LOAD_AND_FUZZ_PLAN.md`](../../docs/LOAD_AND_FUZZ_PLAN.md
 - `fuzz_replay.cpp` — replay determinista de `corpus/` y `regressions/`, cableado
   en `ctest` como `fuzz_replay_test`; protege contra regresiones **sin** libFuzzer
   (p.ej. Apple clang).
-- `corpus/` — semillas. Cada fichero lleva un byte de ruteo inicial: par → modo
-  una-pasada (el resto es la petición HTTP cruda), impar → modo incremental.
+- `corpus/` — semillas curadas, versionadas en git. Cada fichero lleva un byte
+  de ruteo inicial: par → modo una-pasada (el resto es la petición HTTP
+  cruda), impar → modo incremental.
+- `corpus_growth/` — scratch **gitignored** donde libFuzzer escribe los
+  inputs nuevos que descubre durante una campaña (no se commitea; ver más
+  abajo por qué no se le pasa `corpus/` directo).
 - `regressions/` — reproductores de crashes hallados por el fuzzer; se añaden
   aquí para que `fuzz_replay_test` los cubra a perpetuidad.
 
 ## Ejecutar el fuzzer (campaña)
+
+**libFuzzer escribe en el primer directorio que le pasas** (los inputs que
+descubre y que aumentan cobertura quedan ahí) y solo *lee* de los siguientes.
+Pásale siempre `tests/fuzz/corpus_growth` primero y `tests/fuzz/corpus`
+después — si le pasas solo `tests/fuzz/corpus`, una campaña larga te deja
+miles de ficheros nuevos mezclados con las semillas curadas y versionadas.
 
 En macOS Apple clang no trae el runtime de libFuzzer; usa el LLVM de Homebrew:
 
@@ -27,7 +37,9 @@ cmake -B build-fuzz -DORESHNEK_FUZZ=ON \
   -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
 cmake --build build-fuzz --target fuzz_http_parser
-./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
+mkdir -p tests/fuzz/corpus_growth
+./build-fuzz/fuzz_http_parser -max_total_time=60 \
+    tests/fuzz/corpus_growth tests/fuzz/corpus
 ```
 
 En Linux basta el `clang` del sistema, siempre que su `compiler-rt` incluya el
@@ -45,7 +57,14 @@ sudo pacman -S --needed clang compiler-rt
 
 cmake -B build-fuzz -DORESHNEK_FUZZ=ON
 cmake --build build-fuzz --target fuzz_http_parser
+mkdir -p tests/fuzz/corpus_growth
+./build-fuzz/fuzz_http_parser -max_total_time=60 \
+    tests/fuzz/corpus_growth tests/fuzz/corpus
 ```
+
+Guía completa paso a paso (VPS Ubuntu/Debian, incluida la campaña larga con
+evidencia archivada):
+[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](../../docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md).
 
 Verifica antes de una campaña larga que el runtime está presente
 (`find / -name 'libclang_rt.fuzzer*' 2>/dev/null`); si no aparece nada, falta

@@ -112,12 +112,26 @@ cmake --build build-fuzz --target fuzz_http_parser -j"$(nproc)"
 de build solo existe para el target de fuzzing; evita compilar de más en un
 VPS con pocos núcleos.)
 
+**Importante — dos directorios, no uno.** libFuzzer *escribe* en el primer
+directorio que le pasas (cada input nuevo que aumenta cobertura queda ahí) y
+solo *lee* de los siguientes. Si le pasas `tests/fuzz/corpus` como único
+argumento, tras una campaña larga acabas con miles de ficheros nuevos
+mezclados con las semillas curadas y versionadas — pasó exactamente eso en la
+primera corrida real de este runbook (2546 ficheros nuevos, 10 MB). Para
+evitarlo, usa un directorio de scratch (gitignored) como destino de escritura
+y pasa el corpus semilla como entrada de solo lectura:
+
+```bash
+mkdir -p tests/fuzz/corpus_growth   # ya está en .gitignore
+```
+
 ### 3.3 Campaña corta (smoke test, ~1 min)
 
 Confirma que el binario corre antes de invertir 5+ minutos:
 
 ```bash
-./build-fuzz/fuzz_http_parser -max_total_time=60 tests/fuzz/corpus
+./build-fuzz/fuzz_http_parser -max_total_time=60 \
+    tests/fuzz/corpus_growth tests/fuzz/corpus
 ```
 
 Salida esperada: termina sola tras 60 s, sin ningún reporte de
@@ -125,36 +139,46 @@ AddressSanitizer/UndefinedBehaviorSanitizer ni `SUMMARY: libFuzzer: deadly signa
 
 ### 3.4 Campaña larga, con evidencia archivada (cierra el criterio A.5.2)
 
+Fija el nombre del log en una variable **antes** de arrancar — si corres más
+de una campaña el mismo día sobre el mismo commit (p.ej. una corta de prueba
+y luego la larga), un `date +%Y%m%d` sin hora se repite y el `tee` de la
+segunda corrida sobreescribe el log de la primera sin avisar. Con hora y
+minuto en el nombre no colisionan:
+
 ```bash
 mkdir -p tests/fuzz/campaigns
+LOG="tests/fuzz/campaigns/$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD).log"
 ./build-fuzz/fuzz_http_parser -max_total_time=300 -print_final_stats=1 \
-    tests/fuzz/corpus \
-    2>&1 | tee "tests/fuzz/campaigns/$(date +%Y%m%d)-$(git rev-parse --short HEAD).log"
+    tests/fuzz/corpus_growth tests/fuzz/corpus \
+    2>&1 | tee "$LOG"
 ```
 
 `-max_total_time=300` = 5 minutos (el mínimo del criterio A.5.2); sube el
-valor para una campaña más larga (p.ej. `-max_total_time=1800` para 30 min).
+valor para una campaña más larga (p.ej. `-max_total_time=1800` para 30 min;
+en ese caso usa una `$LOG` nueva para no pisar la del smoke test/la corta).
 Al terminar, revisa el resumen final:
 
 ```bash
-tail -25 "tests/fuzz/campaigns/$(date +%Y%m%d)-$(git rev-parse --short HEAD).log"
+tail -25 "$LOG"
 ```
 
 Busca `stat::number_of_executed_units`, `stat::average_exec_per_sec` y
 confirma que no hay ningún reporte de sanitizer en el log completo:
 
 ```bash
-grep -E 'ERROR|SUMMARY: (Address|UndefinedBehavior)Sanitizer|deadly signal' \
-    "tests/fuzz/campaigns/$(date +%Y%m%d)-$(git rev-parse --short HEAD).log" || echo "limpio"
+grep -E 'ERROR|SUMMARY: (Address|UndefinedBehavior)Sanitizer|deadly signal' "$LOG" || echo "limpio"
 ```
 
-Si imprime "limpio", la corrida cierra A.5.2; el `.log` es la evidencia
-(commitéalo si quieres dejar registro en el repo — ver Paso 5).
+Si imprime "limpio", la corrida cierra A.5.2; el `.log` es la evidencia —
+commitéalo (ver Paso 5). El directorio `tests/fuzz/corpus_growth/` (los
+inputs nuevos que encontró el fuzzer) es local y gitignored: revísalo si
+quieres, pero no hace falta commitearlo para que la evidencia cuente — el log
+es lo que se archiva.
 
 ### 3.5 Si aparece un crash
 
 libFuzzer deja un fichero `crash-<hash>` en el directorio desde donde
-corriste el binario (`tests/fuzz/corpus/` o el `cwd`). Cópialo a
+corriste el binario (el `cwd`, no `tests/fuzz/corpus_growth/`). Cópialo a
 `tests/fuzz/regressions/` y confirma que el replay determinista (sin
 fuzzer, cualquier compilador) lo reproduce:
 
@@ -196,6 +220,10 @@ producción** — solo para esta prueba.
 mkdir -p static uploads tools/loadtest/results
 echo "hello from oreshnek load test" > static/sample.txt
 
+# Un solo timestamp para toda la sesión de carga: evita que corridas
+# consecutivas del mismo escenario en el mismo día se pisen el log entre sí.
+RUN_TS="$(date +%Y%m%d-%H%M%S)"
+
 ./build/examples/07_config_server config/oreshnek.loadtest.json \
     > /tmp/oreshnek-loadtest.log 2>&1 &
 SERVER_PID=$!
@@ -221,7 +249,7 @@ de `nproc`.
 WRK_THREADS=$(nproc)
 for c in 50 200 1000; do
     wrk -t"$WRK_THREADS" -c"$c" -d30s http://127.0.0.1:8080/ \
-        2>&1 | tee "tools/loadtest/results/throughput-c${c}-$(date +%Y%m%d).log"
+        2>&1 | tee "tools/loadtest/results/throughput-c${c}-${RUN_TS}.log"
 done
 ```
 
@@ -232,7 +260,7 @@ y que `Socket errors`/`Non-2xx or 3xx responses` sea 0 (criterio B.4.1).
 
 ```bash
 wrk -t"$WRK_THREADS" -c200 -d30s http://127.0.0.1:8080/static/sample.txt \
-    2>&1 | tee "tools/loadtest/results/static-$(date +%Y%m%d).log"
+    2>&1 | tee "tools/loadtest/results/static-${RUN_TS}.log"
 ```
 
 ### 4.5 Escenario 3 — soak (estabilidad de memoria)
@@ -241,28 +269,28 @@ Corre en paralelo: `wrk` sostenido + muestreo de RSS + snapshot de
 `/metrics` antes/después. 20 minutos de ejemplo; el plan pide 10–30 min.
 
 ```bash
-curl -s http://127.0.0.1:8080/metrics > tools/loadtest/results/metrics-antes.prom
+curl -s http://127.0.0.1:8080/metrics > "tools/loadtest/results/metrics-antes-${RUN_TS}.prom"
 
+RSS_CSV="tools/loadtest/results/soak-rss-${RUN_TS}.csv"
 ( while kill -0 "$SERVER_PID" 2>/dev/null; do
-      printf '%s,%s\n' "$(date +%s)" "$(ps -o rss= -p "$SERVER_PID")" \
-          >> tools/loadtest/results/soak-rss.csv
+      printf '%s,%s\n' "$(date +%s)" "$(ps -o rss= -p "$SERVER_PID")" >> "$RSS_CSV"
       sleep 30
   done ) &
 RSS_SAMPLER_PID=$!
 
 wrk -t"$WRK_THREADS" -c200 -d20m http://127.0.0.1:8080/ \
-    2>&1 | tee "tools/loadtest/results/soak-$(date +%Y%m%d).log"
+    2>&1 | tee "tools/loadtest/results/soak-${RUN_TS}.log"
 
 kill "$RSS_SAMPLER_PID" 2>/dev/null
-curl -s http://127.0.0.1:8080/metrics > tools/loadtest/results/metrics-despues.prom
-diff tools/loadtest/results/metrics-antes.prom tools/loadtest/results/metrics-despues.prom
+curl -s http://127.0.0.1:8080/metrics > "tools/loadtest/results/metrics-despues-${RUN_TS}.prom"
+diff "tools/loadtest/results/metrics-antes-${RUN_TS}.prom" "tools/loadtest/results/metrics-despues-${RUN_TS}.prom"
 ```
 
-Qué mirar (criterio B.4.2): `tools/loadtest/results/soak-rss.csv` no debe
-tener una pendiente positiva sostenida (columna 2, en KB) — oscilación
-acotada sí, crecimiento monótono no. El `diff` de `/metrics` debe mostrar
-`requests_total` creciendo acorde a lo que envió `wrk`, y
-`workers_in_flight` de vuelta a su valor base (sin fuga de handlers).
+Qué mirar (criterio B.4.2): `$RSS_CSV` no debe tener una pendiente positiva
+sostenida (columna 2, en KB) — oscilación acotada sí, crecimiento monótono
+no. El `diff` de `/metrics` debe mostrar `requests_total` creciendo acorde a
+lo que envió `wrk`, y `workers_in_flight` de vuelta a su valor base (sin fuga
+de handlers).
 
 ### 4.6 (Opcional) Escenario de saturación — confirma el load shedding
 
