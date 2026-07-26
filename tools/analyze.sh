@@ -26,7 +26,7 @@ have()    { command -v "$1" >/dev/null 2>&1; }
 
 # --- AddressSanitizer + UBSan -------------------------------------------------
 section "AddressSanitizer + UndefinedBehaviorSanitizer"
-if cmake -S . -B build-asan -DORESHNEK_ASAN=ON -DORESHNEK_BUILD_EXAMPLES=OFF >/dev/null 2>&1 \
+if cmake -S . -B build-asan -DORESHNEK_ASAN=ON -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_BUILD_EXAMPLES=OFF >/dev/null 2>&1 \
    && cmake --build build-asan -j >/dev/null 2>&1; then
     # LeakSanitizer is unsupported on macOS; it is on by default on Linux.
     if ! ASAN_OPTIONS="detect_leaks=${ORESHNEK_LSAN:-0}" \
@@ -40,7 +40,7 @@ fi
 # --- ThreadSanitizer ----------------------------------------------------------
 if [ "$RUN_TSAN" = 1 ]; then
     section "ThreadSanitizer"
-    if cmake -S . -B build-tsan -DORESHNEK_TSAN=ON -DORESHNEK_BUILD_EXAMPLES=OFF >/dev/null 2>&1 \
+    if cmake -S . -B build-tsan -DORESHNEK_TSAN=ON -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_BUILD_EXAMPLES=OFF >/dev/null 2>&1 \
        && cmake --build build-tsan -j >/dev/null 2>&1; then
         if ! ctest --test-dir build-tsan --output-on-failure; then
             echo "TSan: FAILURES"; fail=1
@@ -51,7 +51,7 @@ if [ "$RUN_TSAN" = 1 ]; then
 fi
 
 # --- compile_commands.json for the static tools -------------------------------
-cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >/dev/null 2>&1
+cmake -S . -B build -DORESHNEK_WITH_SQLITE=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >/dev/null 2>&1
 
 # --- clang-tidy (bugs, concurrency, CERT security, performance) ---------------
 section "clang-tidy (static analysis)"
@@ -76,7 +76,7 @@ fi
 # --- valgrind (memory + fd leaks) — Linux only --------------------------------
 section "valgrind (memcheck + fd leaks)"
 if have valgrind; then
-    cmake -S . -B build-dbg -DCMAKE_BUILD_TYPE=Debug -DORESHNEK_BUILD_EXAMPLES=OFF >/dev/null 2>&1
+    cmake -S . -B build-dbg -DCMAKE_BUILD_TYPE=Debug -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_BUILD_EXAMPLES=OFF >/dev/null 2>&1
     cmake --build build-dbg --target security_test multipart_test db_test -j >/dev/null 2>&1
     for t in security_test multipart_test db_test; do
         echo "--- valgrind $t ---"
