@@ -325,12 +325,18 @@ mezclar con la línea base de capacidad de B.4. Útil como categoría de
 medición aparte (experiencia de usuario final por geografía), no como
 benchmark de servidor.
 
-- **B.4.3** (503/load-shedding bajo saturación deliberada): ⬜ tooling listo
-  (`tools/loadtest/run.sh --saturation`, ver Paso 4.4 en
-  `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`), verificado localmente (503 +
-  `load_shed_total` creciendo, `responses_total{class="5xx"}` correcto). La
-  corrida en el VPS real que cierre este criterio queda pendiente. Nota: la
-  primera versión de esta guía decía erróneamente que había que activar
+- **B.4.3** (503/load-shedding bajo saturación deliberada): ✅ **Cerrado
+  2026-07-26** (`tools/loadtest/run.sh --saturation`, ver Paso 4.4 en
+  `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`). Corrido en macOS (MacBook M4,
+  loopback): 3 362 864 peticiones en 2xx y **18 759 en 503** exactamente
+  como se esperaba, `load_shed_total` 0→18 759 y
+  `responses_total{class="5xx"}` acorde en el diff de `/metrics`.
+  A diferencia de B.4.1/B.4.2/B.4.4, este criterio valida **lógica del
+  framework** (`workers_in_flight >= max_concurrent_handlers` →
+  `Server.cpp:864`), no capacidad de hardware — es código genérico,
+  independiente de SO/núcleos, así que una corrida en cualquier plataforma
+  es evidencia válida; no hacía falta repetirla en el VPS. Nota: la primera
+  versión de esta guía decía erróneamente que había que activar
   `rate_limit.enabled` — eso responde `429` (otro mecanismo, para abuso por
   IP), no el `503` que este criterio necesita; corregido, usa
   `max_concurrent_handlers` vía `config/oreshnek.loadtest-saturation.json`.
@@ -447,7 +453,7 @@ ejercita simplemente compila:
 
 | # | Bloqueante | Qué lo desbloquea | Estado |
 |---|---|---|---|
-| 1 | Claim de "alto rendimiento" no medido | Línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | ✅ **Cerrado 2026-07-26** (VPS Debian 13, post-fix de `TCP_NODELAY`; ver tabla de línea base en B.4). B.4.3 (load shedding) sin correr todavía, y c=1000 con una cola larga sin explicar del todo — no bloquean el cierre, quedan anotados como seguimiento. |
+| 1 | Claim de "alto rendimiento" no medido | Línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | ✅ **Cerrado 2026-07-26** (VPS Debian 13, post-fix de `TCP_NODELAY`; B.4.3 verificado en macOS el mismo día — ver B.4). Único seguimiento no bloqueante: c=1000 con una cola larga (p99 ~1s) atribuida al arnés de prueba (cliente `wrk` de 1 solo hilo), no al framework. |
 | 2 | `HttpParser` no fuzzeado | Parte A implementada (✅) + al menos una campaña ≥5 min sin crash/leak/UB con su log archivado en `tests/fuzz/campaigns/` (A.5.2) | ✅ **Cerrado 2026-07-25** (VPS Debian 13, campaña de 30 min, 0 crashes/leaks/UB — ver A.5) |
 | 3 | Sin CI | Pipeline (`.github/workflows/` o equivalente) que corra en cada PR: `ctest` bajo ASan/UBSan y TSan, `fuzz_replay_test`, y un job corto de fuzzing (~120 s); idealmente una corrida nightly de fuzz largo + soak de carga | ⬜ no existe |
 
@@ -464,10 +470,11 @@ filas 1 y 2 ya están cerradas.
 1. ✅ **Parte A (fuzz)** — completa: harness + campaña larga archivada
    (2026-07-25). Bloqueante #2 cerrado.
 2. ✅ **Parte B (carga)** — completa: andamiaje `tools/loadtest/run.sh`,
-   campaña completa corrida y línea base documentada (B.4), incluido el bug
-   de `TCP_NODELAY` encontrado y corregido en el proceso. Bloqueante #1
-   cerrado. Seguimiento menor: confirmar núcleos de la VPS para la cola de
-   c=1000, y correr B.4.3 (load shedding) cuando convenga.
+   campaña completa corrida y línea base documentada (B.4, los 4 criterios
+   cerrados), incluido el bug de `TCP_NODELAY` encontrado y corregido en el
+   proceso. Bloqueante #1 cerrado. Único seguimiento no bloqueante: la cola
+   de latencia a c=1000, atribuida al arnés de prueba (cliente `wrk` de un
+   solo hilo en las VPS disponibles), no al framework.
 3. Integración de ambos en el pipeline de CI (job de fuzz corto por PR + soak/
    fuzz largo nightly), cerrando el bloqueante #3.
 
