@@ -135,7 +135,7 @@ mkdir -p "$RESULTS_DIR"
     echo "fecha: $(date)"
     echo "commit: $(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo desconocido)"
     echo "uname: $(uname -a)"
-    echo "wrk: $(command -v wrk)"
+    echo "wrk: $(wrk --version 2>&1 | head -1) ($(command -v wrk))"
     echo "url: $BASE_URL"
     echo "threads: $THREADS"
     echo "concurrencies: $CONCURRENCIES"
@@ -200,7 +200,7 @@ run_wrk() {
     name="$1"; c="$2"; dur="$3"; shift 3
     t="$(threads_for "$c")"
     log "escenario: $name (c=$c, d=$dur, t=$t)"
-    wrk -t"$t" -c"$c" -d"$dur" "$@" 2>&1 | tee "$RESULTS_DIR/$name.log"
+    wrk -t"$t" -c"$c" -d"$dur" --latency "$@" 2>&1 | tee "$RESULTS_DIR/$name.log"
 }
 
 if [ "$SOAK" -eq 0 ]; then
@@ -223,7 +223,7 @@ if [ "$SOAK" -eq 0 ]; then
         for f in "$RESULTS_DIR"/throughput-c*.log "$RESULTS_DIR"/pipeline.log "$RESULTS_DIR"/static-range.log; do
             [ -f "$f" ] || continue
             echo "## $(basename "$f")"
-            grep -E 'Requests/sec|Latency|Socket errors|Non-2xx' "$f" || true
+            grep -E 'Requests/sec|Latency|Socket errors|Non-2xx|^ +[0-9]+%' "$f" || true
             echo
         done
     } > "$RESULTS_DIR/summary.md"
@@ -256,7 +256,7 @@ else
         echo "# Resumen soak ($RUN_TS)"
         echo
         echo "## soak.log"
-        grep -E 'Requests/sec|Latency|Socket errors|Non-2xx' "$RESULTS_DIR/soak.log" || true
+        grep -E 'Requests/sec|Latency|Socket errors|Non-2xx|^ +[0-9]+%' "$RESULTS_DIR/soak.log" || true
         echo
         echo "## RSS (primera/última muestra, KB)"
         head -1 "$RSS_CSV" 2>/dev/null || echo "(sin muestras)"

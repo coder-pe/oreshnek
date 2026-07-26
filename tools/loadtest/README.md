@@ -97,6 +97,27 @@ Produce además `metrics-antes.prom`/`metrics-despues.prom` (snapshot de
 
 `tools/loadtest/run.sh --help` lista todas.
 
+### ¿Corriendo esto en tu laptop cuenta como línea base?
+
+Como sanity check del harness y del propio servidor, sí — confirma que
+compila, levanta, sirve tráfico real y no tira errores. **Como línea base de
+producción para la sección B.4 del plan, no**, por dos motivos:
+
+1. **El objetivo de despliegue es Linux** (VPS/servidor; `epoll`, no
+   `kqueue`), no macOS — el número que importa para producción es el que sale
+   en el mismo tipo de máquina donde correrá el servicio real.
+2. **`wrk` y el servidor comparten los mismos núcleos** cuando ambos corren
+   en la misma laptop: compiten por CPU entre sí, lo que puede tanto
+   deprimir el throughput medido como enmascarar dónde está el techo real del
+   servidor (¿el cuello de botella es el servidor o es que `wrk` también
+   necesita CPU?). Correr `wrk` desde una máquina separada (o al menos en un
+   VPS con más núcleos que hilos de `wrk`) aísla esa variable.
+
+Recomendado: usa una corrida en laptop para iterar rápido mientras ajustas
+algo, y una corrida en el VPS (idealmente con `wrk` en una máquina cliente
+aparte, ver abajo) para el número que efectivamente se transcribe a la tabla
+de línea base de `LOAD_AND_FUZZ_PLAN.md`.
+
 ### Probar desde una máquina cliente separada del servidor
 
 Si el servidor bajo prueba es el VPS y quieres generar la carga desde otra
@@ -117,10 +138,24 @@ a `0.0.0.0/0`.
 
 ## 3. Interpretar los resultados (criterios B.4 del plan)
 
-- **`summary.md`**: `Requests/sec` y la tabla de latencias `50%/90%/99%` de
-  cada escenario; `Socket errors`/`Non-2xx or 3xx responses` deben ser 0
-  (criterio B.4.1) — `wrk` solo imprime esas líneas cuando hay algo que
-  reportar, así que su ausencia en el log ya es la señal de "sin errores".
+- **`summary.md`**: `Requests/sec` y la tabla de latencias `50%/75%/90%/99%`
+  de cada escenario (`run.sh` pasa `--latency` a `wrk` para que esa tabla
+  aparezca); `Socket errors`/`Non-2xx or 3xx responses` deben ser 0 (criterio
+  B.4.1) — `wrk` solo imprime esas líneas cuando hay algo que reportar, así
+  que su ausencia en el log ya es la señal de "sin errores".
+- **Escenario `pipeline`, caveat conocido**: con pipelining real, la tabla de
+  percentiles de `wrk` puede salir con `75%/90%/99%` en `0.00us` — es una
+  limitación documentada de cómo `wrk` contabiliza latencia por petición
+  cuando varias respuestas llegan por una sola lectura del socket, no un bug
+  del servidor ni del script. Para ese escenario confía solo en
+  `Requests/sec` y en que no haya `Socket errors`/`Non-2xx`; no uses sus
+  percentiles para el criterio B.4.4.
+- **`server.log` con muchas líneas `[ERROR] Error reading from socket N:
+  Connection reset by peer` al final de cada escenario**: también esperado —
+  es `wrk` cerrando sus conexiones abruptamente (RST) cuando termina cada
+  corrida, no un fallo del servidor. El número de líneas debería rondar la
+  concurrencia (`-c`) de ese escenario; si ves errores de otro tipo, o muchos
+  más de los esperados, ahí sí investiga.
 - **`soak-rss.csv`** (columna 2, KB): no debe tener pendiente positiva
   sostenida — oscilación acotada sí, crecimiento monótono no (B.4.2).
 - **`metrics.diff`**: confirma que `requests_total`/`responses_total{class="2xx"}`
