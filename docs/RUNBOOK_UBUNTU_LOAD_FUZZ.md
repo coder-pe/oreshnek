@@ -296,6 +296,17 @@ CI/release si prefieres no engordar el repo con corridas frecuentes.
   any port 8080 proto tcp`, y `sudo ufw delete allow from <IP-del-cliente> to
   any port 8080 proto tcp` al terminar. No dejes el puerto abierto a
   `0.0.0.0/0` en un VPS con datos reales.
+- **`tools/loadtest/run.sh --skip-server --url http://<ip-vps>:8080` dice
+  "`/health` no responde"**: casi siempre son **dos firewalls, no uno**. El
+  `ufw allow` de arriba abre el del sistema operativo, pero la mayoría de
+  proveedores VPS (DigitalOcean, Vultr, Hetzner, AWS Security Groups, GCP
+  Firewall, Azure NSG...) tienen **otro firewall a nivel de red**, gestionado
+  desde su panel web, que bloquea el tráfico antes de que llegue siquiera al
+  `ufw` del VPS — hay que agregar la regla ahí también. `run.sh` imprime un
+  checklist de diagnóstico (¿el proceso corre?, ¿responde en `127.0.0.1`
+  dentro del VPS?, ¿`ss -tlnp` lo muestra escuchando?, ...) cuando esta
+  comprobación falla; síguelo en orden antes de asumir que es un bug del
+  servidor.
 - **VPS con pocos núcleos/RAM y el soak se ve raro (RSS con picos)**: revisa
   `dmesg | tail` por si el OOM killer intervino; baja la concurrencia
   (`-c200` → `-c50`) y el `thread_pool_size` de

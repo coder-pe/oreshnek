@@ -155,6 +155,24 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Reintenta GET $BASE_URL/health hasta $1 veces (1 intento/seg). Guarda el
+# último stderr de curl en LAST_CURL_ERR para diagnóstico si todos fallan —
+# "no responde" a secas no dice si fue connection refused, timeout de red,
+# TLS, DNS, etc.
+LAST_CURL_ERR=""
+wait_for_health() {
+    max="$1"
+    i=0
+    while [ "$i" -lt "$max" ]; do
+        if LAST_CURL_ERR="$(curl -sS --connect-timeout 5 --max-time 10 -f "$BASE_URL/health" 2>&1 >/dev/null)"; then
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    return 1
+}
+
 if [ "$SKIP_SERVER" -eq 0 ]; then
     [ -x "$BINARY" ] || die "no existe (o no es ejecutable) el binario '$BINARY'. Compílalo primero:
   cmake -B build -DORESHNEK_WITH_SQLITE=ON && cmake --build build --target 07_config_server
@@ -173,19 +191,29 @@ o pasa --binary/--skip-server. Detalle: docs/DEPENDENCIES.md / docs/RUNBOOK_UBUN
     ( cd "$REPO_ROOT" && exec "$BINARY" "$CONFIG" ) > "$RESULTS_DIR/server.log" 2>&1 &
     SERVER_PID=$!
 
-    ok=0
-    for _ in $(seq 1 30); do
-        if curl -sf "$BASE_URL/health" >/dev/null 2>&1; then
-            ok=1
-            break
-        fi
-        sleep 1
-    done
-    [ "$ok" -eq 1 ] || die "el servidor no respondió /health en 30s — revisa $RESULTS_DIR/server.log"
+    wait_for_health 30 || die "el servidor no respondió /health en 30s — revisa $RESULTS_DIR/server.log
+Último error de curl: $LAST_CURL_ERR"
     log "servidor listo (PID $SERVER_PID)"
 else
-    log "--skip-server: asumiendo que $BASE_URL ya está sirviendo"
-    curl -sf "$BASE_URL/health" >/dev/null 2>&1 || die "$BASE_URL/health no responde"
+    log "--skip-server: comprobando $BASE_URL/health"
+    wait_for_health 5 || die "$BASE_URL/health no responde tras varios intentos.
+Último error de curl: $LAST_CURL_ERR
+
+Checklist (a correr en la máquina que sirve $BASE_URL, no en esta):
+  1. ¿El proceso está corriendo?        pgrep -fa 07_config_server
+  2. ¿Responde en localhost?            curl -sf http://127.0.0.1:8080/health
+     (si esto SÍ funciona pero desde afuera no, es un problema de red/firewall,
+     no de la aplicación)
+  3. ¿Escucha en 0.0.0.0, no en 127.0.0.1?   ss -tlnp | grep 8080
+  4. ¿El firewall del SO deja pasar el puerto?
+       ufw:      sudo ufw status | grep 8080
+       iptables: sudo iptables -L -n | grep 8080
+  5. Firewall/Security Group del proveedor cloud (aparte del firewall del
+     SO) — revisa el panel del proveedor; muchos bloquean todo menos
+     22/80/443 hacia afuera por defecto y hay que abrir 8080 a mano.
+  6. --url tiene host y puerto correctos, y usa http:// salvo que
+     tls.enabled=true en la config del servidor (entonces es https://)."
+    log "$BASE_URL responde"
 fi
 
 # Hilos de wrk para una concurrencia dada: nunca más que la concurrencia

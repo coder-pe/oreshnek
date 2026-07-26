@@ -136,6 +136,18 @@ Abre el puerto solo para la IP del cliente y ciérralo al terminar (ver
 Troubleshooting en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`); no lo dejes expuesto
 a `0.0.0.0/0`.
 
+**Si `--skip-server` te da "`/health` no responde" contra un VPS remoto**,
+la causa más común no es el servidor sino que **hay dos firewalls, no uno**:
+el del sistema operativo (`ufw`/`iptables`, cubierto arriba) y, aparte, el
+**firewall a nivel de red del proveedor cloud** (Security Group en AWS,
+Firewall en GCP/DigitalOcean/Hetzner/Vultr, NSG en Azure, etc.) — este último
+bloquea el tráfico *antes* de que llegue siquiera al SO, así que un `ufw
+allow` correcto no basta si el proveedor lo sigue descartando. Revisa el
+panel de control del proveedor y agrega una regla de entrada para TCP/8080
+(o el puerto que uses) además de la de `ufw`. `run.sh` con `--skip-server`
+te muestra un checklist de diagnóstico paso a paso cuando falla esta
+comprobación.
+
 ## 3. Interpretar los resultados (criterios B.4 del plan)
 
 - **`summary.md`**: `Requests/sec` y la tabla de latencias `50%/75%/90%/99%`
