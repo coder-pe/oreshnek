@@ -24,7 +24,7 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 | A — Harness de fuzzing | ✅ Implementado | `tests/fuzz/` (harness, corpus, replay determinista en `ctest`); commit `c271ee8`. |
 | A — Campaña larga + evidencia archivada | ✅ Cerrado | Debian 13 (VPS), campaña de 30 min: **3 033 053 ejecuciones**, ~1684 exec/s, `new_units_added: 1449`, `peak_rss_mb: 525`, 0 crashes/leaks/UB (`grep` de patrones de sanitizer sobre el log completo → "limpio"). También se corrió una previa de 5 min, limpia igual (su log no quedó archivado por separado: ver nota abajo). Log: `tests/fuzz/campaigns/20260725-4c443e1.log`. |
 | B — Andamiaje de carga automatizado (`run.sh`) | ✅ Implementado | [`tools/loadtest/run.sh`](../tools/loadtest/run.sh) + `scripts/pipeline.lua` + `scripts/range.lua`; corre los 4 escenarios de B.3, portable macOS/Linux (probado en ambos). Uso: [`tools/loadtest/README.md`](../tools/loadtest/README.md). |
-| B — Línea base documentada | ⬜ Pendiente | Primera campaña completa (VPS Debian 13, 2026-07-26; mismo host y cliente/servidor separados, incluido soak de 20 min) corrida — 0 errores, RSS estable, pero **encontró un bug de rendimiento real**: sin `TCP_NODELAY`, headers y cuerpo se enviaban en dos `send()` separados y el Nagle/delayed-ACK resultante añadía ~40ms fijos a cada respuesta (visible incluso sobre loopback, confirmado con el histograma interno de `/metrics` mostrando <0.5ms de procesamiento real). Corregido (commit siguiente); la línea base "oficial" de B.4 queda pendiente de una campaña posterior a la corrección. |
+| B — Línea base documentada | ✅ Cerrado (con una nota abierta) | Campaña pre-fix (2026-07-26) encontró un bug real: sin `TCP_NODELAY`, Nagle/delayed-ACK añadía ~40ms fijos a cada respuesta. Corregido (`fa9537a`/PR #29) y **re-corrido en el mismo VPS** (commit `5150a17`): 0 errores, RSS estable, mejoras de 6–29x en latencia/throughput según escenario — ver tabla en B.4. Pendiente menor: a c=1000 sigue una cola larga (p99 ~1s) sin relación con el fix; falta confirmar núcleos reales de la VPS para saber si es techo real de hardware o límite del cliente `wrk` (single-threaded ahí). |
 | CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
 
 ---
@@ -266,6 +266,40 @@ para detectar regresiones) se registra **después** de este fix, no antes —
 los números de arriba quedan documentados como diagnóstico, no como
 baseline.
 
+#### Línea base oficial (post-fix, VPS Debian 13, 2026-07-26, commit `5150a17`)
+
+Misma campaña completa (mismo host + soak de 20 min + cliente/servidor
+separados) repetida tras el fix de `TCP_NODELAY`:
+
+| Escenario | Mismo VPS (loopback) | Cliente/servidor separados |
+|---|---|---|
+| c=50  | p50 1.50ms, 27 283 req/s | p50 29.77ms, 1 656 req/s |
+| c=200 | p50 6.40ms, 26 793 req/s | p50 30.58ms, 5 988 req/s |
+| c=1000 | p50 41.54ms (p99 1.07s), 22 144 req/s | p50 72.35ms (p99 861ms), 12 635 req/s |
+| static+Range (c=200) | 12 193 req/s | 6 516 req/s |
+| soak (20 min, c=200) | 31 818 863 requests totales, p50 6.52ms | — |
+
+- **B.4.1** (0 errores/timeouts): ✅ — ningún `Socket errors`/`Non-2xx` en
+  ninguno de los logs.
+- **B.4.2** (RSS estable en el soak): ✅ — calienta de ~14.6MB a ~216MB en
+  los primeros 30s y se mantiene plano (216572–216620 KB) el resto de los 20
+  min / 31.8M requests. Mismo patrón que la corrida pre-fix, con ~5.9x más
+  tráfico procesado en la misma ventana.
+- **B.4.4** (p99 no se dispara sin control por debajo de saturación): ✅ a
+  c=50/200 (p99 de un dígito a low-double-digit ms en loopback, 35–110ms en
+  red real). **A c=1000 sigue habiendo una cola larga** (p99 ~1s) — igual de
+  larga que antes del fix, es decir, el fix de Nagle **no la tocó**: es un
+  problema distinto, probablemente el propio `wrk` limitado a 1 solo hilo en
+  esa VPS (`threads: 1` en `metadata.txt`) saturándose él mismo al manejar
+  1000 conexiones, o el VPS teniendo realmente 1 vCPU y estando ya en (o
+  más allá de) su punto de saturación a esa concurrencia. Pendiente:
+  confirmar núcleos reales de esa VPS (`nproc`) para interpretar si c=1000
+  es un techo real del hardware (resultado válido) o una limitación del
+  cliente de carga (repetir con `--threads` más alto o desde un cliente con
+  más núcleos).
+- **B.4.3** (503/load-shedding bajo saturación deliberada): sin correr
+  todavía — ver Paso 4.4 en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`.
+
 ### B.5 Comparación honesta con terceros (opcional, fase posterior)
 
 Un arnés tipo TechEmpower queda fuera de este entregable; se anota como paso
@@ -378,14 +412,15 @@ ejercita simplemente compila:
 
 | # | Bloqueante | Qué lo desbloquea | Estado |
 |---|---|---|---|
-| 1 | Claim de "alto rendimiento" no medido | Línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | 🔄 andamiaje (`run.sh`) implementado y probado; falta correr la campaña completa y fijar la línea base |
+| 1 | Claim de "alto rendimiento" no medido | Línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | ✅ **Cerrado 2026-07-26** (VPS Debian 13, post-fix de `TCP_NODELAY`; ver tabla de línea base en B.4). B.4.3 (load shedding) sin correr todavía, y c=1000 con una cola larga sin explicar del todo — no bloquean el cierre, quedan anotados como seguimiento. |
 | 2 | `HttpParser` no fuzzeado | Parte A implementada (✅) + al menos una campaña ≥5 min sin crash/leak/UB con su log archivado en `tests/fuzz/campaigns/` (A.5.2) | ✅ **Cerrado 2026-07-25** (VPS Debian 13, campaña de 30 min, 0 crashes/leaks/UB — ver A.5) |
 | 3 | Sin CI | Pipeline (`.github/workflows/` o equivalente) que corra en cada PR: `ctest` bajo ASan/UBSan y TSan, `fuzz_replay_test`, y un job corto de fuzzing (~120 s); idealmente una corrida nightly de fuzz largo + soak de carga | ⬜ no existe |
 
-Mientras las filas 1 o 3 no estén en ✅, el claim de "listo para producción"
-en el README y en `docs/ROADMAP.md` debe seguir matizado con "Fases 0–6
+Mientras la fila 3 (CI) no esté en ✅, el claim de "listo para producción" en
+el README y en `docs/ROADMAP.md` debe seguir matizado con "Fases 0–6
 completadas" (que es exacto) en vez de "producción validada" (que no lo es
-todavía). La fila 2 ya no es parte de esa reserva.
+todavía) — es el único bloqueante que queda de los tres originales. Las
+filas 1 y 2 ya están cerradas.
 
 ---
 
@@ -393,9 +428,11 @@ todavía). La fila 2 ya no es parte de esa reserva.
 
 1. ✅ **Parte A (fuzz)** — completa: harness + campaña larga archivada
    (2026-07-25). Bloqueante #2 cerrado.
-2. 🔄 **Parte B (carga)**: andamiaje `tools/loadtest/run.sh` hecho y probado
-   en macOS/Linux; falta correr la campaña completa y documentar la línea
-   base (B.4) — siguiente paso, cierra el bloqueante #1.
+2. ✅ **Parte B (carga)** — completa: andamiaje `tools/loadtest/run.sh`,
+   campaña completa corrida y línea base documentada (B.4), incluido el bug
+   de `TCP_NODELAY` encontrado y corregido en el proceso. Bloqueante #1
+   cerrado. Seguimiento menor: confirmar núcleos de la VPS para la cola de
+   c=1000, y correr B.4.3 (load shedding) cuando convenga.
 3. Integración de ambos en el pipeline de CI (job de fuzz corto por PR + soak/
    fuzz largo nightly), cerrando el bloqueante #3.
 
