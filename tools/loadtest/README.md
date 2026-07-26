@@ -125,7 +125,9 @@ máquina (para no compartir CPU entre servidor y `wrk`, más representativo de
 producción):
 
 ```bash
-# En el VPS (servidor):
+# En el VPS (servidor) — el fichero de static/ hay que crearlo a mano, ver
+# el aviso más abajo:
+mkdir -p static && yes 'oreshnek load test line' | head -n 200 > static/sample.txt
 ./build/examples/07_config_server config/oreshnek.loadtest.json
 
 # En la máquina cliente (con wrk instalado, ver Paso 1):
@@ -135,6 +137,14 @@ tools/loadtest/run.sh --skip-server --url http://<ip-del-vps>:8080
 Abre el puerto solo para la IP del cliente y ciérralo al terminar (ver
 Troubleshooting en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`); no lo dejes expuesto
 a `0.0.0.0/0`.
+
+**El Escenario 3 (estático+Range) necesita `static/sample.txt` en la máquina
+que sirve** — `run.sh` solo lo crea automáticamente cuando arranca el
+servidor él mismo (sin `--skip-server`). Si arrancaste el servidor a mano
+(como arriba) y te olvidas de crear ese fichero, `run.sh` lo detecta antes de
+correr `wrk` (`curl` a `/static/sample.txt`) y **omite el escenario con un
+aviso** en vez de dejar un log de "100% Non-2xx" que parece evidencia válida
+sin serlo.
 
 **Si `--skip-server` te da "`/health` no responde" contra un VPS remoto**,
 la causa más común no es el servidor sino que **hay dos firewalls, no uno**:
