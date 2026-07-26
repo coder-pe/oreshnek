@@ -24,7 +24,7 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 | A — Harness de fuzzing | ✅ Implementado | `tests/fuzz/` (harness, corpus, replay determinista en `ctest`); commit `c271ee8`. |
 | A — Campaña larga + evidencia archivada | ✅ Cerrado | Debian 13 (VPS), campaña de 30 min: **3 033 053 ejecuciones**, ~1684 exec/s, `new_units_added: 1449`, `peak_rss_mb: 525`, 0 crashes/leaks/UB (`grep` de patrones de sanitizer sobre el log completo → "limpio"). También se corrió una previa de 5 min, limpia igual (su log no quedó archivado por separado: ver nota abajo). Log: `tests/fuzz/campaigns/20260725-4c443e1.log`. |
 | B — Andamiaje de carga automatizado (`run.sh`) | ✅ Implementado | [`tools/loadtest/run.sh`](../tools/loadtest/run.sh) + `scripts/pipeline.lua` + `scripts/range.lua`; corre los 4 escenarios de B.3, portable macOS/Linux (probado en ambos). Uso: [`tools/loadtest/README.md`](../tools/loadtest/README.md). |
-| B — Línea base documentada | ⬜ Pendiente | El andamiaje existe y se probó funcionalmente, pero nadie corrió aún una campaña completa (los 4 escenarios, duración plena) para fijar la línea base de B.4. |
+| B — Línea base documentada | ⬜ Pendiente | Primera campaña completa (VPS Debian 13, 2026-07-26; mismo host y cliente/servidor separados, incluido soak de 20 min) corrida — 0 errores, RSS estable, pero **encontró un bug de rendimiento real**: sin `TCP_NODELAY`, headers y cuerpo se enviaban en dos `send()` separados y el Nagle/delayed-ACK resultante añadía ~40ms fijos a cada respuesta (visible incluso sobre loopback, confirmado con el histograma interno de `/metrics` mostrando <0.5ms de procesamiento real). Corregido (commit siguiente); la línea base "oficial" de B.4 queda pendiente de una campaña posterior a la corrección. |
 | CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
 
 ---
@@ -232,6 +232,39 @@ resultados" más abajo.
      mantiene acotado ≤ cap.
   4. p99 no se dispara de forma no acotada al subir la concurrencia por debajo
      del punto de saturación.
+
+#### Hallazgo de la primera campaña (2026-07-26): Nagle sin `TCP_NODELAY`
+
+Primera corrida completa en un VPS Debian 13, tanto en el mismo host
+(loopback) como con cliente y servidor en máquinas separadas. Criterios 1 y 2
+se cumplieron (0 errores, RSS plana en el soak), pero la latencia percibida
+por `wrk` no encajaba con un handler JSON en memoria:
+
+| Escenario (loopback) | p50 |
+|---|---|
+| c=50  | 43.84 ms |
+| c=200 | 43.78 ms |
+| c=1000 | 52.00 ms |
+
+Latencia prácticamente **plana independiente de la concurrencia** — la firma
+de un costo fijo por petición, no de contención de recursos. El propio
+histograma de `/metrics` del servidor (`request_duration_seconds`) mostraba
+>99.5% de las peticiones procesadas internamente en <0.5ms durante ese mismo
+soak, así que los ~44ms no eran tiempo de handler.
+
+Causa: `handle_new_connection()` (`src/server/Server.cpp`) nunca configuraba
+`TCP_NODELAY` en el socket del cliente, y `Connection::write_data()` envía
+las cabeceras y el cuerpo en dos `send()` separados — con Nagle activo, el
+segundo `send()` espera el ACK del primero, y el peer usa *delayed ACK*
+(hasta 40ms en Linux) al no tener nada que responder de inmediato. Corregido
+añadiendo `setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, ...)` junto al
+`SO_NOSIGPIPE` existente. Verificado: mismo escenario (loopback, c=50) pasó
+de p50 43.84ms a **0.39ms** tras el fix.
+
+La línea base "oficial" de B.4 (la que se compara contra futuras corridas
+para detectar regresiones) se registra **después** de este fix, no antes —
+los números de arriba quedan documentados como diagnóstico, no como
+baseline.
 
 ### B.5 Comparación honesta con terceros (opcional, fase posterior)
 
