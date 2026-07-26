@@ -8,6 +8,7 @@
 #include <unistd.h>   // For close, pipe, read, write
 #include <sys/socket.h> // For socket, bind, listen, accept
 #include <netinet/in.h> // For sockaddr_in
+#include <netinet/tcp.h> // For TCP_NODELAY
 #include <arpa/inet.h>  // For inet_ntoa
 #include <errno.h>    // For errno
 #include <cstring>    // For strerror
@@ -706,6 +707,15 @@ void Server::handle_new_connection() {
         int nosigpipe = 1;
         setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
 #endif
+
+        // Disable Nagle's algorithm: headers and body are written via separate
+        // send() calls (Connection::write_data()), and without TCP_NODELAY the
+        // second send() stalls waiting for the peer's ACK of the first, which
+        // combined with the peer's delayed-ACK timer adds tens of ms of latency
+        // to every response regardless of load (observed empirically: ~40ms
+        // flat latency even over loopback in tools/loadtest runs).
+        int nodelay = 1;
+        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
 #ifdef __linux__
         epoll_event event;

@@ -188,6 +188,10 @@ delegan a infraestructura especializada.
 - 🔄 Benchmarks / validación de carga (wrk): andamiaje
   ([`tools/loadtest/run.sh`](../tools/loadtest/run.sh)) implementado y
   probado en macOS y Linux — ver [`tools/loadtest/README.md`](../tools/loadtest/README.md).
-  Falta correr la campaña completa y fijar la línea base reproducible +
-  soak (Parte B, criterio B.4 de `LOAD_AND_FUZZ_PLAN.md`).
+  Primera campaña completa corrida (VPS Debian 13, 2026-07-26): 0 errores,
+  RSS estable, pero encontró y motivó la corrección de un bug real de
+  rendimiento (`TCP_NODELAY` ausente → Nagle/delayed-ACK añadía ~40ms fijos
+  por respuesta; ver detalle en `LOAD_AND_FUZZ_PLAN.md` B.4). Falta correr la
+  campaña posterior al fix y fijar la línea base reproducible + soak (Parte
+  B, criterio B.4).
 - ⬜ Comparación con terceros tipo TechEmpower (fase posterior).
