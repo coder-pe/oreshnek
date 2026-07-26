@@ -10,7 +10,11 @@ salida a internet para `apt`/`git clone`.
 
 Si necesitas los comandos equivalentes para macOS, Fedora/RHEL/CentOS Stream o
 Arch, están en [`docs/DEPENDENCIES.md`](DEPENDENCIES.md); este documento se
-centra solo en Ubuntu/Debian para no mezclar rutas.
+centra solo en Ubuntu/Debian para no mezclar rutas. Si **solo** te interesa la
+prueba de carga (no el fuzzing) y quieres la versión que cubre macOS y Linux
+por igual en un solo lugar, ve directo a
+[`tools/loadtest/README.md`](../tools/loadtest/README.md) — el Paso 4 de aquí
+abajo remite ahí de todos modos.
 
 ---
 
@@ -196,10 +200,11 @@ se sobreescribe** — es el registro de cuándo y cómo se halló.
 
 ## Paso 4 — Prueba de carga (wrk)
 
-`tools/loadtest/` todavía no tiene el andamiaje automatizado descrito en la
-Parte B de `LOAD_AND_FUZZ_PLAN.md` (`run.sh`, scripts Lua). Mientras tanto,
-esto es la versión manual de los mismos escenarios, con la misma convención de
-dónde guardar la evidencia.
+`tools/loadtest/run.sh` automatiza los 4 escenarios de la Parte B (arranca el
+servidor, espera a `/health`, corre `wrk`, apaga el servidor con `SIGTERM` y
+archiva todo). Detalle completo de flags y cómo interpretar los resultados:
+[`tools/loadtest/README.md`](../tools/loadtest/README.md); aquí solo lo
+mínimo para correrlo en el VPS.
 
 ### 4.1 Compila el servidor de demo
 
@@ -209,109 +214,47 @@ cmake -B build -DORESHNEK_WITH_SQLITE=ON   # ya existe si hiciste el Paso 2
 cmake --build build --target 07_config_server -j"$(nproc)"
 ```
 
-### 4.2 Prepara los directorios y arranca el servidor
-
-Usa la config de carga incluida en el repo
-(`config/oreshnek.loadtest.json`): rate limiting deshabilitado (para medir el
-techo real, no el limitador) y `/metrics` habilitado. **No es una config de
-producción** — solo para esta prueba.
+### 4.2 Escenarios 1–3 (throughput, pipelining, estático+Range)
 
 ```bash
-mkdir -p static uploads tools/loadtest/results
-echo "hello from oreshnek load test" > static/sample.txt
-
-# Un solo timestamp para toda la sesión de carga: evita que corridas
-# consecutivas del mismo escenario en el mismo día se pisen el log entre sí.
-RUN_TS="$(date +%Y%m%d-%H%M%S)"
-
-./build/examples/07_config_server config/oreshnek.loadtest.json \
-    > /tmp/oreshnek-loadtest.log 2>&1 &
-SERVER_PID=$!
-echo "servidor arrancado, PID=$SERVER_PID"
-
-# Espera a que responda /health antes de lanzar wrk (hasta 30 intentos = ~30s)
-for i in $(seq 1 30); do
-    curl -sf http://127.0.0.1:8080/health >/dev/null && break
-    sleep 1
-done
-curl -s http://127.0.0.1:8080/health && echo " <- servidor listo"
+tools/loadtest/run.sh
 ```
 
-Si el `curl` final no imprime `{"status":"ok"}`, revisa
-`/tmp/oreshnek-loadtest.log` antes de seguir (ver Troubleshooting).
+Arranca `examples/07_config_server` con
+`config/oreshnek.loadtest.json` (rate limiting deshabilitado a propósito,
+para medir el techo real; `/metrics` habilitado — **no es una config de
+producción**), corre los tres escenarios (~2–3 min en total con la duración
+por defecto de 30 s cada uno) y archiva todo en
+`tools/loadtest/results/<timestamp>/summary.md`. Si el servidor no levanta,
+el script te apunta a `results/<timestamp>/server.log`.
 
-### 4.3 Escenario 1 — throughput/latencia a concurrencia creciente
-
-Ajusta `-t` (hilos de wrk) al número de vCPUs del VPS; no tiene sentido pasar
-de `nproc`.
+### 4.3 Escenario 4 — soak (estabilidad de memoria, 10–30 min)
 
 ```bash
-WRK_THREADS=$(nproc)
-for c in 50 200 1000; do
-    wrk -t"$WRK_THREADS" -c"$c" -d30s http://127.0.0.1:8080/ \
-        2>&1 | tee "tools/loadtest/results/throughput-c${c}-${RUN_TS}.log"
-done
+tools/loadtest/run.sh --soak --soak-duration 20m
 ```
 
-Qué mirar en cada log: `Requests/sec`, la tabla de latencias `50%/90%/99%`,
-y que `Socket errors`/`Non-2xx or 3xx responses` sea 0 (criterio B.4.1).
-
-### 4.4 Escenario 2 — fichero estático (ruta `sendfile`)
-
-```bash
-wrk -t"$WRK_THREADS" -c200 -d30s http://127.0.0.1:8080/static/sample.txt \
-    2>&1 | tee "tools/loadtest/results/static-${RUN_TS}.log"
-```
-
-### 4.5 Escenario 3 — soak (estabilidad de memoria)
-
-Corre en paralelo: `wrk` sostenido + muestreo de RSS + snapshot de
-`/metrics` antes/después. 20 minutos de ejemplo; el plan pide 10–30 min.
-
-```bash
-curl -s http://127.0.0.1:8080/metrics > "tools/loadtest/results/metrics-antes-${RUN_TS}.prom"
-
-RSS_CSV="tools/loadtest/results/soak-rss-${RUN_TS}.csv"
-( while kill -0 "$SERVER_PID" 2>/dev/null; do
-      printf '%s,%s\n' "$(date +%s)" "$(ps -o rss= -p "$SERVER_PID")" >> "$RSS_CSV"
-      sleep 30
-  done ) &
-RSS_SAMPLER_PID=$!
-
-wrk -t"$WRK_THREADS" -c200 -d20m http://127.0.0.1:8080/ \
-    2>&1 | tee "tools/loadtest/results/soak-${RUN_TS}.log"
-
-kill "$RSS_SAMPLER_PID" 2>/dev/null
-curl -s http://127.0.0.1:8080/metrics > "tools/loadtest/results/metrics-despues-${RUN_TS}.prom"
-diff "tools/loadtest/results/metrics-antes-${RUN_TS}.prom" "tools/loadtest/results/metrics-despues-${RUN_TS}.prom"
-```
-
-Qué mirar (criterio B.4.2): `$RSS_CSV` no debe tener una pendiente positiva
+Añade a los resultados `metrics-antes.prom`/`metrics-despues.prom` (snapshot
+de `/metrics`) y `soak-rss.csv` (RSS muestreado cada 30 s). Qué mirar
+(criterio B.4.2): `soak-rss.csv` no debe tener una pendiente positiva
 sostenida (columna 2, en KB) — oscilación acotada sí, crecimiento monótono
-no. El `diff` de `/metrics` debe mostrar `requests_total` creciendo acorde a
-lo que envió `wrk`, y `workers_in_flight` de vuelta a su valor base (sin fuga
-de handlers).
+no; el diff de `/metrics` debe mostrar `requests_total` creciendo acorde a lo
+que envió `wrk` y `workers_in_flight` de vuelta a su valor base.
 
-### 4.6 (Opcional) Escenario de saturación — confirma el load shedding
+### 4.4 (Opcional) Escenario de saturación — confirma el load shedding
 
 Para validar el criterio B.4.3 (503 bajo sobrecarga deliberada en vez de
-estancarse), reinicia el servidor con `rate_limit.enabled: true` y un
-`requests_per_second` bajo en `config/oreshnek.loadtest.json` (o una copia),
-y lanza concurrencia muy por encima de ese límite; deberías ver `503` en la
-sección `Non-2xx or 3xx responses` de wrk (esperado y correcto aquí, a
-diferencia del Escenario 1) y `load_shed_total` creciendo en `/metrics`.
+estancarse): copia `config/oreshnek.loadtest.json`, pon
+`rate_limit.enabled: true` con un `requests_per_second` bajo, y corre
+`tools/loadtest/run.sh --config esa-copia.json --concurrencies 500`; deberías
+ver `Non-2xx or 3xx responses` con `503` (esperado y correcto aquí, a
+diferencia de los Escenarios 1–3) y `load_shed_total` creciendo en
+`/metrics`.
 
-### 4.7 Detén el servidor (apagado graceful)
-
-```bash
-kill -TERM "$SERVER_PID"
-wait "$SERVER_PID" 2>/dev/null
-echo "servidor detenido"
-```
-
-`SIGTERM` dispara `request_stop()`: el servidor deja de aceptar conexiones
-nuevas, drena las peticiones en vuelo (hasta `shutdown_grace_sec=10` en la
-config) y sale solo — no hace falta `kill -9`.
+El servidor se detiene solo al terminar cada corrida (`SIGTERM` →
+`request_stop()`: deja de aceptar conexiones nuevas, drena las peticiones en
+vuelo hasta `shutdown_grace_sec=10` de la config, y sale) — no hace falta
+matarlo a mano.
 
 ---
 
@@ -340,11 +283,12 @@ CI/release si prefieres no engordar el repo con corridas frecuentes.
   (`apt-cache search libclang-rt` ayuda si el nombre no calza).
 - **`wrk: command not found`**: el paquete no está disponible en tu
   Ubuntu/Debian; usa el fallback de compilar desde fuente del Paso 1.
-- **El `curl http://127.0.0.1:8080/health` del Paso 4.2 nunca responde**:
-  revisa `/tmp/oreshnek-loadtest.log` (errores de arranque van ahí); causa
-  típica es el puerto 8080 ya ocupado por una corrida anterior —
-  `ss -tlnp | grep 8080` para ver quién lo tiene y `kill` ese proceso, o
-  `pkill -f 07_config_server` si es un `07_config_server` colgado de antes.
+- **`tools/loadtest/run.sh` sale con "el servidor no respondió /health en
+  30s"**: revisa `tools/loadtest/results/<timestamp>/server.log` (errores de
+  arranque van ahí); causa típica es el puerto 8080 ya ocupado por una
+  corrida anterior — `ss -tlnp | grep 8080` para ver quién lo tiene y `kill`
+  ese proceso, o `pkill -f 07_config_server` si es un `07_config_server`
+  colgado de antes.
 - **Probar desde otra máquina, no desde el propio VPS**: por defecto este
   runbook asume que `wrk` corre en el mismo VPS contra `127.0.0.1` (sin tocar
   el firewall). Si de verdad necesitas pegarle desde fuera, abre el puerto

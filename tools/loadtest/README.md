@@ -1,15 +1,147 @@
-# tools/loadtest/
+# tools/loadtest/ — prueba de carga (wrk)
 
-El andamiaje automatizado descrito en la Parte B de
-[`docs/LOAD_AND_FUZZ_PLAN.md`](../../docs/LOAD_AND_FUZZ_PLAN.md) (`run.sh`,
-scripts Lua de wrk) **todavía no está implementado** — ver la tabla de "Estado
-actual" en ese documento.
+Automatiza los 4 escenarios de la Parte B de
+[`docs/LOAD_AND_FUZZ_PLAN.md`](../../docs/LOAD_AND_FUZZ_PLAN.md) contra
+`examples/07_config_server`, y archiva la evidencia (logs de `wrk`, snapshots
+de `/metrics`, CSV de RSS) en `tools/loadtest/results/<timestamp>/`.
 
-Mientras tanto, la forma de correr la prueba de carga es manual, con
-comandos `wrk` directos contra `examples/07_config_server`. Paso a paso
-completo (pensado para un VPS Ubuntu/Debian, pero el mismo procedimiento
-aplica a cualquier Linux/macOS con `wrk` instalado):
-[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](../../docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md).
+**El mismo `run.sh` funciona igual en macOS y en cualquier distro Linux** —
+detecta núcleos disponibles (`nproc` en Linux, `sysctl -n hw.ncpu` en macOS),
+usa solo `bash`+`curl`+`wrk`+utilidades POSIX, y se probó tal cual en ambos.
+Lo único distinto entre sistemas operativos es cómo instalas `wrk` y compilas
+el servidor — una vez hecho eso, el comando es idéntico.
 
-`results/` es donde caen los logs de `wrk`, los snapshots de `/metrics` y el
-CSV de RSS de cada corrida (evidencia para el criterio B.4 del plan).
+## 1. Preparar el sistema (una vez por máquina)
+
+### macOS
+
+```bash
+brew install cmake openssl sqlite wrk
+cmake -B build -DORESHNEK_WITH_SQLITE=ON
+cmake --build build --target 07_config_server -j"$(sysctl -n hw.ncpu)"
+```
+
+### Linux (cualquier distro)
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev wrk
+# Fedora/RHEL/CentOS Stream: sudo dnf groupinstall -y "Development Tools" && \
+#   sudo dnf install -y cmake openssl-devel sqlite-devel   (wrk: compilar desde fuente, ver abajo)
+# Arch: sudo pacman -S --needed base-devel cmake openssl sqlite   (wrk: AUR o fuente)
+
+cmake -B build -DORESHNEK_WITH_SQLITE=ON
+cmake --build build --target 07_config_server -j"$(nproc)"
+```
+
+Si tu distro no empaqueta `wrk` (Fedora/RHEL/CentOS/Arch), compílalo desde
+fuente — es el mismo procedimiento en cualquier Linux:
+
+```bash
+git clone https://github.com/wg/wrk.git /tmp/wrk-src
+cd /tmp/wrk-src && make -j"$(nproc)" && sudo cp wrk /usr/local/bin/ && cd -
+```
+
+Lista completa de dependencias (todas las distros, todos los backends de BD,
+fuzzing incluido): [`docs/DEPENDENCIES.md`](../../docs/DEPENDENCIES.md). Guía
+aún más detallada, paso a paso, para un VPS Ubuntu/Debian (incluye también el
+fuzzing de la Parte A): [`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](../../docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md).
+
+## 2. Correr la prueba de carga
+
+Con el binario ya compilado (Paso 1), desde la raíz del repo, en **cualquiera**
+de los dos sistemas operativos:
+
+```bash
+tools/loadtest/run.sh
+```
+
+Esto arranca `examples/07_config_server` con
+[`config/oreshnek.loadtest.json`](../../config/oreshnek.loadtest.json)
+(rate limiting deshabilitado a propósito, para medir el techo real; `/metrics`
+habilitado), espera a que `/health` responda, corre los Escenarios 1–3 de la
+Parte B (throughput a concurrencia creciente, pipelining, estático+Range) y
+apaga el servidor con `SIGTERM` (graceful) al terminar. Salida:
+
+```
+tools/loadtest/results/20260726-153000/
+├── metadata.txt          # fecha, commit, uname, wrk, comando
+├── server.log            # stdout/stderr del servidor
+├── throughput-c50.log    # salida completa de wrk por concurrencia
+├── throughput-c200.log
+├── throughput-c1000.log
+├── pipeline.log
+├── static-range.log
+└── summary.md            # Requests/sec, latencias y errores, todo junto
+```
+
+Para el escenario de soak (10–30 min, estabilidad de memoria — Escenario 4),
+en vez de los tres anteriores:
+
+```bash
+tools/loadtest/run.sh --soak --soak-duration 20m
+```
+
+Produce además `metrics-antes.prom`/`metrics-despues.prom` (snapshot de
+`/metrics`), `soak-rss.csv` (RSS muestreado cada 30s) y `metrics.diff`.
+
+### Flags más usadas
+
+| Flag | Para qué |
+|---|---|
+| `--url URL` | Servidor ya corriendo en otra IP/puerto (junto con `--skip-server`) |
+| `--skip-server` | No arrancar el servidor — útil si `wrk` corre en una máquina cliente separada del servidor bajo prueba |
+| `--concurrencies "50 200 1000"` | Niveles de concurrencia del Escenario 1 |
+| `--duration 30s` | Duración de cada corrida corta (Escenarios 1–3) |
+| `--binary PATH` / `--config PATH` | Si tu build/config no están en las rutas por defecto |
+
+`tools/loadtest/run.sh --help` lista todas.
+
+### Probar desde una máquina cliente separada del servidor
+
+Si el servidor bajo prueba es el VPS y quieres generar la carga desde otra
+máquina (para no compartir CPU entre servidor y `wrk`, más representativo de
+producción):
+
+```bash
+# En el VPS (servidor):
+./build/examples/07_config_server config/oreshnek.loadtest.json
+
+# En la máquina cliente (con wrk instalado, ver Paso 1):
+tools/loadtest/run.sh --skip-server --url http://<ip-del-vps>:8080
+```
+
+Abre el puerto solo para la IP del cliente y ciérralo al terminar (ver
+Troubleshooting en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`); no lo dejes expuesto
+a `0.0.0.0/0`.
+
+## 3. Interpretar los resultados (criterios B.4 del plan)
+
+- **`summary.md`**: `Requests/sec` y la tabla de latencias `50%/90%/99%` de
+  cada escenario; `Socket errors`/`Non-2xx or 3xx responses` deben ser 0
+  (criterio B.4.1) — `wrk` solo imprime esas líneas cuando hay algo que
+  reportar, así que su ausencia en el log ya es la señal de "sin errores".
+- **`soak-rss.csv`** (columna 2, KB): no debe tener pendiente positiva
+  sostenida — oscilación acotada sí, crecimiento monótono no (B.4.2).
+- **`metrics.diff`**: confirma que `requests_total`/`responses_total{class="2xx"}`
+  crecieron acorde a lo que envió `wrk`, y que `workers_in_flight` volvió a su
+  valor base (sin fuga de handlers).
+- Para el criterio B.4.3 (503/load-shedding bajo saturación deliberada), ver
+  la sección correspondiente en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md` (Paso 4.6)
+  — requiere `rate_limit.enabled: true` en la config, a propósito distinto de
+  la config de línea base.
+
+Una vez tengas una corrida completa y limpia, transcribe un resumen (no el
+log completo) a la tabla de línea base en la sección B.4 de
+[`docs/LOAD_AND_FUZZ_PLAN.md`](../../docs/LOAD_AND_FUZZ_PLAN.md), enlazando a
+la carpeta de `results/` correspondiente como evidencia — mismo criterio que
+ya se usa para las campañas de fuzzing archivadas en `tests/fuzz/campaigns/`.
+
+## Piezas
+
+- `run.sh` — orquestador (bash portable, sin dependencias GNU-only).
+- `scripts/pipeline.lua` — pipelining real de HTTP/1.1 (Escenario 2): concatena
+  varias peticiones en una sola escritura al socket.
+- `scripts/range.lua` — fuerza `Range: bytes=0-1023` en cada petición
+  (Escenario 3), para ejercitar la ruta `206 Partial Content`.
+- `results/` — evidencia archivada, un subdirectorio por corrida.
