@@ -1,0 +1,104 @@
+name: Nightly
+
+# Corridas largas que no tiene sentido meter en el gate de cada PR: campaña de
+# fuzzing extendida y un soak corto de carga. Ver docs/LOAD_AND_FUZZ_PLAN.md
+# ("Qué desbloquea el indicador de producción", bloqueante #3).
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # ~03:17 UTC diario; minuto no redondo para no
+                          # competir con la hora en punto, que es cuando más
+                          # jobs programados de otros repos arrancan a la vez.
+  workflow_dispatch: {}
+
+jobs:
+  fuzz-long:
+    name: Fuzzing largo (25 min)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev zlib1g-dev clang
+
+      - name: Verificar runtime de libFuzzer
+        run: |
+          if ! find / -xdev -name 'libclang_rt.fuzzer*' 2>/dev/null | grep -q .; then
+            echo "::error::clang no trae el runtime de libFuzzer (compiler-rt). Ver docs/DEPENDENCIES.md."
+            exit 1
+          fi
+
+      - name: Configurar
+        run: |
+          cmake -B build-fuzz -DORESHNEK_FUZZ=ON -DORESHNEK_WITH_SQLITE=ON \
+            -DORESHNEK_BUILD_TESTS=OFF -DORESHNEK_BUILD_EXAMPLES=OFF \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Compilar fuzz_http_parser
+        run: cmake --build build-fuzz --target fuzz_http_parser -j"$(nproc)"
+
+      - name: Campaña de 25 min
+        run: |
+          mkdir -p tests/fuzz/corpus_growth
+          ./build-fuzz/fuzz_http_parser -max_total_time=1500 -print_final_stats=1 \
+            tests/fuzz/corpus_growth tests/fuzz/corpus 2>&1 | tee fuzz-nightly.log
+
+      # Se sube siempre (no solo en failure): el log es la evidencia de la
+      # campaña en sí, con el mismo criterio que tests/fuzz/campaigns/ para
+      # las corridas manuales (ver tests/fuzz/campaigns/README.md).
+      - name: Subir log + reproductor de crash (si lo hay)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-nightly-${{ github.run_id }}
+          path: |
+            fuzz-nightly.log
+            crash-*
+          if-no-files-found: ignore
+          retention-days: 30
+
+  soak-smoke:
+    name: Soak corto (5 min, smoke — no línea base de rendimiento)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev zlib1g-dev wrk curl
+
+      - name: Compilar servidor de demo
+        run: |
+          cmake -B build -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_BUILD_TESTS=OFF
+          cmake --build build --target 07_config_server -j"$(nproc)"
+
+      # El runner de GitHub Actions es una máquina compartida de specs
+      # variables: los números de throughput/latencia de esta corrida NO son
+      # una línea base de rendimiento (esa vive en LOAD_AND_FUZZ_PLAN.md,
+      # medida en la VPS real de producción). Este job es una red de
+      # seguridad de regresión: confirma que un soak sostenido sigue sin
+      # errores y sin fuga de memoria, no cuánto rinde el hardware de hoy.
+      - name: Soak de 5 min
+        run: tools/loadtest/run.sh --soak --soak-duration 5m
+
+      - name: Verificar 0 errores en el soak
+        run: |
+          LATEST="$(ls -td tools/loadtest/results/*/ | head -1)"
+          if grep -qE 'Socket errors|Non-2xx' "$LATEST/soak.log"; then
+            echo "::error::el soak nightly reportó errores — ver el log subido como artefacto"
+            exit 1
+          fi
+
+      - name: Subir resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-nightly-${{ github.run_id }}
+          path: tools/loadtest/results/
+          if-no-files-found: ignore
+          retention-days: 30
