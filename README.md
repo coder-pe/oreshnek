@@ -18,6 +18,7 @@ Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado pa
 > [arquitectura](docs/ARCHITECTURE.md) · [seguridad](docs/SECURITY.md) ·
 > [persistencia/BD](docs/DATABASE.md) ·
 > [plan de carga y fuzzing](docs/LOAD_AND_FUZZ_PLAN.md) ·
+> [prueba de carga (macOS/Linux)](tools/loadtest/README.md) ·
 > [runbook Ubuntu/Debian (VPS)](docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md) ·
 > [comparativa con Drogon](docs/COMPARISON_DROGON.md) ·
 > [changelog](CHANGELOG.md) ·

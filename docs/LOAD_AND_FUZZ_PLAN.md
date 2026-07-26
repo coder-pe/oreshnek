@@ -23,8 +23,8 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 |---|---|---|
 | A — Harness de fuzzing | ✅ Implementado | `tests/fuzz/` (harness, corpus, replay determinista en `ctest`); commit `c271ee8`. |
 | A — Campaña larga + evidencia archivada | ✅ Cerrado | Debian 13 (VPS), campaña de 30 min: **3 033 053 ejecuciones**, ~1684 exec/s, `new_units_added: 1449`, `peak_rss_mb: 525`, 0 crashes/leaks/UB (`grep` de patrones de sanitizer sobre el log completo → "limpio"). También se corrió una previa de 5 min, limpia igual (su log no quedó archivado por separado: ver nota abajo). Log: `tests/fuzz/campaigns/20260725-4c443e1.log`. |
-| B — Andamiaje de carga automatizado (`run.sh`) | ⬜ Pendiente | `run.sh`/scripts Lua no existen. Mientras tanto, los escenarios se corren a mano — ver [`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md). |
-| B — Línea base documentada | ⬜ Pendiente | Depende de B.1. |
+| B — Andamiaje de carga automatizado (`run.sh`) | ✅ Implementado | [`tools/loadtest/run.sh`](../tools/loadtest/run.sh) + `scripts/pipeline.lua` + `scripts/range.lua`; corre los 4 escenarios de B.3, portable macOS/Linux (probado en ambos). Uso: [`tools/loadtest/README.md`](../tools/loadtest/README.md). |
+| B — Línea base documentada | ⬜ Pendiente | El andamiaje existe y se probó funcionalmente, pero nadie corrió aún una campaña completa (los 4 escenarios, duración plena) para fijar la línea base de B.4. |
 | CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
 
 ---
@@ -173,22 +173,28 @@ producción" más abajo.
 
 ## Parte B — Validación de carga (wrk)
 
-**Estado: ⬜ pendiente el andamiaje automatizado.** El `run.sh`/scripts Lua
-descritos abajo no existen todavía; esta sección sigue siendo el diseño a
-construir, no una descripción de algo ya hecho. Mientras tanto, los mismos
-escenarios se pueden correr **manualmente** con `wrk` directo — ver
-[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md) (Ubuntu/
-Debian) y [`tools/loadtest/README.md`](../tools/loadtest/README.md).
+**Estado: ✅ andamiaje implementado, ⬜ línea base sin fijar.**
+[`tools/loadtest/run.sh`](../tools/loadtest/run.sh) automatiza los 4
+escenarios de B.3 y se probó de punta a punta en macOS y Linux. Uso completo:
+[`tools/loadtest/README.md`](../tools/loadtest/README.md) (multiplataforma) y
+[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md) (VPS
+Ubuntu/Debian paso a paso, incluye también el fuzzing de la Parte A). Falta
+correr una campaña completa (duración plena, los 4 escenarios) y transcribir
+sus números a B.4 como línea base — ver "Recolección y documentación de
+resultados" más abajo.
 
 ### B.1 Andamiaje
 
 - `tools/loadtest/` con:
-  - `run.sh <url> [--soak]`: lanza el servidor de demo
-    (`examples/07_config_server`) con una config de carga conocida, espera a
-    `/health`, corre los escenarios wrk y vuelca resultados.
-  - Scripts Lua wrk: `get_json.lua` (JSON pequeño, camino caliente),
-    `keepalive.lua` (reutilización de conexión), `pipeline.lua` (pipelining),
-    `static.lua` (fichero estático vía `sendfile`).
+  - `run.sh [opciones]`: lanza el servidor de demo
+    (`examples/07_config_server`) con `config/oreshnek.loadtest.json`, espera
+    a `/health`, corre los escenarios de B.3 (o el soak con `--soak`) y
+    archiva todo en `results/<timestamp>/` (logs de wrk, `metadata.txt`,
+    snapshots de `/metrics`, CSV de RSS, `summary.md`).
+  - `scripts/pipeline.lua` (pipelining real, Escenario 2) y
+    `scripts/range.lua` (fuerza `Range: bytes=0-1023`, Escenario 3). Los
+    escenarios 1 y 3 (sin la cabecera Range) no necesitan script: `wrk` hace
+    GET simple con keep-alive por defecto.
 - Perfilado en dos ejes: **throughput/latencia** (ráfaga corta, p50/p90/p99) y
   **estabilidad** (soak de 10–30 min observando RSS y `/metrics`).
 
@@ -285,48 +291,34 @@ LOG="tests/fuzz/campaigns/$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD).l
 
 ### Carga (Parte B)
 
-El andamiaje automatizado (`run.sh` + scripts Lua) no existe todavía; la
-versión manual —ejecutable ya mismo— con estos mismos comandos, aplicada paso
-a paso contra `examples/07_config_server`, está en
-[`docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`](RUNBOOK_UBUNTU_LOAD_FUZZ.md) (Paso 4).
-Resumen del patrón (rutas relativas a `tools/loadtest/results/`, que ya
-existe en el repo):
-
 ```bash
-# Snapshot de /metrics antes y después de cada escenario (formato Prometheus,
-# texto plano — diff directo con `diff`).
-curl -s http://localhost:8080/metrics > "tools/loadtest/results/<escenario>-antes.prom"
-
-# wrk con salida completa archivada (no solo el resumen de consola). Sin -s,
-# wrk hace GET simple al URL — suficiente para los escenarios 1 y 2 de B.3;
-# los scripts Lua (get_json.lua, pipeline.lua, ...) quedan para cuando exista
-# el andamiaje automatizado.
-wrk -t4 -c200 -d60s http://localhost:8080/ \
-    2>&1 | tee "tools/loadtest/results/<escenario>-$(date +%Y%m%d).log"
-
-curl -s http://localhost:8080/metrics > "tools/loadtest/results/<escenario>-despues.prom"
-
-# RSS durante el soak: muestreo periódico a un CSV (timestamp,rss_kb).
-while kill -0 "$SERVER_PID" 2>/dev/null; do
-    printf '%s,%s\n' "$(date +%s)" "$(ps -o rss= -p "$SERVER_PID")" >> tools/loadtest/results/soak-rss.csv
-    sleep 30
-done
+tools/loadtest/run.sh                        # Escenarios 1-3 (~2-3 min)
+tools/loadtest/run.sh --soak --soak-duration 20m   # Escenario 4 (soak)
 ```
 
-- Qué extraer del log de wrk para B.4: `Requests/sec`, la tabla de
-  latencias (`50%`/`90%`/`99%`), `Socket errors` (debe ser 0 salvo 503
-  deliberados) y `Non-2xx or 3xx responses`.
-- El diff de `/metrics` antes/después confirma `requests_total`,
+`run.sh` ya hace todo el patrón de metadatos/evidencia por su cuenta:
+arranca el servidor, corre `wrk` con la salida completa archivada (no un
+resumen editado a mano), toma snapshots de `/metrics` antes/después del soak,
+muestrea RSS a un CSV, y escribe `metadata.txt` (fecha, commit, `uname -a`,
+ruta de `wrk`, comando) en cada `results/<timestamp>/`. Detalle de flags e
+interpretación de cada fichero de salida:
+[`tools/loadtest/README.md`](../tools/loadtest/README.md).
+
+- Qué extraer para B.4: `Requests/sec` y latencias `50%/90%/99%` de
+  `summary.md`; `Socket errors`/`Non-2xx or 3xx responses` deben ser 0 salvo
+  en el escenario de saturación deliberada (503 esperados ahí).
+- `results/<timestamp>/metrics.diff` confirma `requests_total`,
   `load_shed_total` y que `workers_in_flight` volvió a su línea base tras el
   escenario (sin fuga de handlers en vuelo).
-- `results/soak-rss.csv` es la evidencia del criterio "RSS estable" — se
-  espera una serie plana o con oscilación acotada, no una pendiente positiva
-  sostenida; un gráfico rápido (`gnuplot`/hoja de cálculo) basta para el
-  registro, no hace falta tooling adicional.
+- `results/<timestamp>/soak-rss.csv` es la evidencia del criterio "RSS
+  estable" — se espera una serie plana o con oscilación acotada, no una
+  pendiente positiva sostenida; un gráfico rápido (`gnuplot`/hoja de cálculo)
+  basta para el registro, no hace falta tooling adicional.
 - Una vez exista una corrida completa de los 4 escenarios de B.3 con su
   evidencia, se transcribe un resumen (no el log completo) a una tabla de
   línea base en este documento (sección B.4) y/o en
-  [`docs/ANALYSIS.md`](ANALYSIS.md), con enlace al log crudo correspondiente.
+  [`docs/ANALYSIS.md`](ANALYSIS.md), con enlace a la carpeta `results/`
+  correspondiente.
 
 ### Dónde vive la evidencia
 
@@ -353,14 +345,14 @@ ejercita simplemente compila:
 
 | # | Bloqueante | Qué lo desbloquea | Estado |
 |---|---|---|---|
-| 1 | Claim de "alto rendimiento" no medido | Parte B implementada + línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | ⬜ Parte B ni siquiera implementada |
+| 1 | Claim de "alto rendimiento" no medido | Línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | 🔄 andamiaje (`run.sh`) implementado y probado; falta correr la campaña completa y fijar la línea base |
 | 2 | `HttpParser` no fuzzeado | Parte A implementada (✅) + al menos una campaña ≥5 min sin crash/leak/UB con su log archivado en `tests/fuzz/campaigns/` (A.5.2) | ✅ **Cerrado 2026-07-25** (VPS Debian 13, campaña de 30 min, 0 crashes/leaks/UB — ver A.5) |
 | 3 | Sin CI | Pipeline (`.github/workflows/` o equivalente) que corra en cada PR: `ctest` bajo ASan/UBSan y TSan, `fuzz_replay_test`, y un job corto de fuzzing (~120 s); idealmente una corrida nightly de fuzz largo + soak de carga | ⬜ no existe |
 
-Mientras cualquiera de las filas 1 o 3 esté en ⬜, el claim de "listo para
-producción" en el README y en `docs/ROADMAP.md` debe seguir matizado con "Fases
-0–6 completadas" (que es exacto) en vez de "producción validada" (que no lo
-es todavía). La fila 2 ya no es parte de esa reserva.
+Mientras las filas 1 o 3 no estén en ✅, el claim de "listo para producción"
+en el README y en `docs/ROADMAP.md` debe seguir matizado con "Fases 0–6
+completadas" (que es exacto) en vez de "producción validada" (que no lo es
+todavía). La fila 2 ya no es parte de esa reserva.
 
 ---
 
@@ -368,8 +360,9 @@ es todavía). La fila 2 ya no es parte de esa reserva.
 
 1. ✅ **Parte A (fuzz)** — completa: harness + campaña larga archivada
    (2026-07-25). Bloqueante #2 cerrado.
-2. **Parte B (carga)**: andamiaje `tools/loadtest/` + línea base documentada
-   — siguiente paso, cierra el bloqueante #1.
+2. 🔄 **Parte B (carga)**: andamiaje `tools/loadtest/run.sh` hecho y probado
+   en macOS/Linux; falta correr la campaña completa y documentar la línea
+   base (B.4) — siguiente paso, cierra el bloqueante #1.
 3. Integración de ambos en el pipeline de CI (job de fuzz corto por PR + soak/
    fuzz largo nightly), cerrando el bloqueante #3.
 

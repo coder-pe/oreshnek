@@ -185,6 +185,9 @@ delegan a infraestructura especializada.
   2026-07-25, campaña de 30 min (3 033 053 ejecuciones) sin crash/leak/UB,
   log archivado en `tests/fuzz/campaigns/` (criterio A.5.2 de
   `LOAD_AND_FUZZ_PLAN.md`, cerrado).
-- ⬜ Benchmarks / validación de carga (wrk) — línea base reproducible + soak.
-  Diseño en `LOAD_AND_FUZZ_PLAN.md` (Parte B); nada implementado todavía.
+- 🔄 Benchmarks / validación de carga (wrk): andamiaje
+  ([`tools/loadtest/run.sh`](../tools/loadtest/run.sh)) implementado y
+  probado en macOS y Linux — ver [`tools/loadtest/README.md`](../tools/loadtest/README.md).
+  Falta correr la campaña completa y fijar la línea base reproducible +
+  soak (Parte B, criterio B.4 de `LOAD_AND_FUZZ_PLAN.md`).
 - ⬜ Comparación con terceros tipo TechEmpower (fase posterior).
