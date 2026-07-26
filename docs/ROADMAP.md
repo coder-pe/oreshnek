@@ -192,8 +192,10 @@ delegan a infraestructura especializada.
   primera encontró y motivó la corrección de un bug real de rendimiento
   (`TCP_NODELAY` ausente → Nagle/delayed-ACK añadía ~40ms fijos por
   respuesta); la segunda, ya con el fix, fija la línea base reproducible +
-  soak (0 errores, RSS estable, mejoras de 6–29x según escenario). Detalle
-  en `LOAD_AND_FUZZ_PLAN.md` B.4. Pendiente menor: confirmar núcleos de esa
-  VPS para interpretar la cola de latencia a c=1000, y correr el escenario
-  de load shedding (B.4.3).
+  soak (0 errores, RSS estable, mejoras de 6–29x según escenario). Escenario
+  de load shedding (B.4.3, `run.sh --saturation`) verificado también: 503 +
+  `load_shed_total` creciendo tal como se espera. Detalle en
+  `LOAD_AND_FUZZ_PLAN.md` B.4 — los 4 criterios cerrados. Único seguimiento
+  no bloqueante: la cola de latencia a c=1000, atribuida al arnés de prueba
+  (cliente `wrk` de un solo hilo), no al framework.
 - ⬜ Comparación con terceros tipo TechEmpower (fase posterior).
