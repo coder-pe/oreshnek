@@ -1,6 +1,7 @@
 # Oreshnek C++ Web Framework
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![CI](https://github.com/coder-pe/oreshnek/actions/workflows/ci.yml/badge.svg)](https://github.com/coder-pe/oreshnek/actions/workflows/ci.yml)
 
 Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado para construir aplicaciones y APIs web rápidas y escalables. Compila con **C++20 o C++17** (`ORESHNEK_CXX_STANDARD`), para funcionar también en toolchains sin compilador C++20. Utiliza un modelo asíncrono y basado en eventos con `epoll` en Linux y `kqueue` en macOS para una gestión eficiente de las conexiones.
 
@@ -9,8 +10,12 @@ Oreshnek es un framework web para C++ ligero y de alto rendimiento, diseñado pa
 > sanitizers), seguridad (JWT/PBKDF2, anti directory-traversal, límites),
 > HTTP/1.1 + streaming, robustez productiva (config externa, logging, timeouts,
 > shutdown graceful, middleware), abstracción de BD + **PostgreSQL/Oracle**, y
-> **TLS + rate limiting + métricas Prometheus**. El plan y su progreso están en
-> [`docs/ROADMAP.md`](docs/ROADMAP.md).
+> **TLS + rate limiting + métricas Prometheus**. Los tres bloqueantes de
+> producción de la evaluación original también están cerrados: rendimiento
+> medido con línea base reproducible, `HttpParser` fuzzeado con campañas
+> archivadas, y CI (sanitizers + fuzzing en cada PR, fuzz largo + soak
+> nightly) — detalle en [`docs/LOAD_AND_FUZZ_PLAN.md`](docs/LOAD_AND_FUZZ_PLAN.md).
+> El plan y su progreso general están en [`docs/ROADMAP.md`](docs/ROADMAP.md).
 >
 > **Recursos:** [ejemplos de referencia](examples/README.md) ·
 > [dependencias por sistema operativo](docs/DEPENDENCIES.md) ·

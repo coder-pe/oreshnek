@@ -1,14 +1,13 @@
 # Plan: validación de carga (wrk) y fuzzing del parser (libFuzzer)
 
-Cierre de dos de los tres bloqueantes de producción identificados en la
-evaluación: (1) el claim de "alto rendimiento" (README) no está medido y (2) el
-`HttpParser` —superficie de ataque #1— no está fuzzeado. El bloqueante (2) ya
-está cerrado (ver "Estado actual"); el (1) sigue abierto. El tercer
-bloqueante, CI, queda fuera de este documento (ver "Qué desbloquea el
-indicador de producción" más abajo). Este documento define qué construir,
-cómo, los criterios de aceptación, y **cómo se documenta la evidencia** de
-que cada criterio se cumplió — un harness que compila no es evidencia; una
-campaña ejecutada con su salida archivada sí lo es.
+Cierre de los tres bloqueantes de producción identificados en la evaluación:
+(1) el claim de "alto rendimiento" (README) no estaba medido, (2) el
+`HttpParser` —superficie de ataque #1— no estaba fuzzeado, y (3) no había CI.
+**Los tres están cerrados** (ver "Estado actual" y "Qué desbloquea el
+indicador de producción"). Este documento define qué se construyó, cómo, los
+criterios de aceptación, y **cómo se documenta la evidencia** de que cada
+criterio se cumplió — un harness que compila no es evidencia; una campaña
+ejecutada con su salida archivada sí lo es.
 
 Herramientas acordadas: **wrk** para carga, **libFuzzer + ASan/UBSan** para fuzz.
 
@@ -25,7 +24,7 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 | A — Campaña larga + evidencia archivada | ✅ Cerrado | Debian 13 (VPS), campaña de 30 min: **3 033 053 ejecuciones**, ~1684 exec/s, `new_units_added: 1449`, `peak_rss_mb: 525`, 0 crashes/leaks/UB (`grep` de patrones de sanitizer sobre el log completo → "limpio"). También se corrió una previa de 5 min, limpia igual (su log no quedó archivado por separado: ver nota abajo). Log: `tests/fuzz/campaigns/20260725-4c443e1.log`. |
 | B — Andamiaje de carga automatizado (`run.sh`) | ✅ Implementado | [`tools/loadtest/run.sh`](../tools/loadtest/run.sh) + `scripts/pipeline.lua` + `scripts/range.lua`; corre los 4 escenarios de B.3, portable macOS/Linux (probado en ambos). Uso: [`tools/loadtest/README.md`](../tools/loadtest/README.md). |
 | B — Línea base documentada | ✅ Cerrado | Campaña pre-fix (2026-07-26) encontró un bug real: sin `TCP_NODELAY`, Nagle/delayed-ACK añadía ~40ms fijos a cada respuesta. Corregido (`fa9537a`/PR #29) y **re-corrido en el mismo VPS** (commit `5150a17`): 0 errores, RSS estable, mejoras de 6–29x en latencia/throughput según escenario — ver tabla en B.4. Investigada la cola a c=1000 invirtiendo servidor/cliente (el VPS original tiene 1 solo vCPU): no mejoró al darle más núcleos al servidor, así que el límite parece estar en el cliente `wrk` de un solo hilo, no en el framework — documentado como limitación del arnés de prueba, no bloqueante. |
-| CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
+| CI | ✅ Cerrado | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (por PR/push) + [`nightly.yml`](../.github/workflows/nightly.yml) (diario) — ver sección "CI" más abajo. |
 
 ---
 
@@ -455,13 +454,35 @@ ejercita simplemente compila:
 |---|---|---|---|
 | 1 | Claim de "alto rendimiento" no medido | Línea base documentada (B.4) con evidencia archivada (logs de wrk + snapshots de `/metrics` + CSV de RSS) y los 4 criterios cualitativos de B.4 cumplidos | ✅ **Cerrado 2026-07-26** (VPS Debian 13, post-fix de `TCP_NODELAY`; B.4.3 verificado en macOS el mismo día — ver B.4). Único seguimiento no bloqueante: c=1000 con una cola larga (p99 ~1s) atribuida al arnés de prueba (cliente `wrk` de 1 solo hilo), no al framework. |
 | 2 | `HttpParser` no fuzzeado | Parte A implementada (✅) + al menos una campaña ≥5 min sin crash/leak/UB con su log archivado en `tests/fuzz/campaigns/` (A.5.2) | ✅ **Cerrado 2026-07-25** (VPS Debian 13, campaña de 30 min, 0 crashes/leaks/UB — ver A.5) |
-| 3 | Sin CI | Pipeline (`.github/workflows/` o equivalente) que corra en cada PR: `ctest` bajo ASan/UBSan y TSan, `fuzz_replay_test`, y un job corto de fuzzing (~120 s); idealmente una corrida nightly de fuzz largo + soak de carga | ⬜ no existe |
+| 3 | Sin CI | Pipeline (`.github/workflows/` o equivalente) que corra en cada PR: `ctest` bajo ASan/UBSan y TSan, `fuzz_replay_test`, y un job corto de fuzzing (~120 s); idealmente una corrida nightly de fuzz largo + soak de carga | ✅ **Cerrado 2026-07-26** — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (4 jobs por PR/push a `main`: build+ctest normal, ASan/UBSan, TSan, fuzz de 120s) y [`nightly.yml`](../.github/workflows/nightly.yml) (fuzz de 25 min + soak de 5 min, diario) |
 
-Mientras la fila 3 (CI) no esté en ✅, el claim de "listo para producción" en
-el README y en `docs/ROADMAP.md` debe seguir matizado con "Fases 0–6
-completadas" (que es exacto) en vez de "producción validada" (que no lo es
-todavía) — es el único bloqueante que queda de los tres originales. Las
-filas 1 y 2 ya están cerradas.
+Con los tres bloqueantes cerrados, el claim de "listo para producción" en el
+README y en `docs/ROADMAP.md` ya no necesita el matiz de "Fases 0–6
+completadas" — puede decir que la validación de carga, fuzzing y CI están en
+su lugar. Detalle de cada pipeline:
+
+## CI (bloqueante #3)
+
+- **`ci.yml`** (en cada push/PR a `main`): 4 jobs en paralelo —
+  1. `build-test`: build normal + `ctest` completo (incluye `fuzz_replay_test`,
+     que no necesita libFuzzer).
+  2. `asan-ubsan`: build con `-DORESHNEK_ASAN=ON` + `ctest` (LeakSanitizer
+     activo por defecto en Linux).
+  3. `tsan`: build con `-DORESHNEK_TSAN=ON` + `ctest`.
+  4. `fuzz-short`: clang + libFuzzer, campaña de 120s contra `fuzz_http_parser`;
+     sube el reproductor como artefacto si encuentra un crash.
+- **`nightly.yml`** (cron diario + disparo manual):
+  1. `fuzz-long`: campaña de 25 min, log siempre subido como artefacto (mismo
+     criterio que `tests/fuzz/campaigns/` para las corridas manuales).
+  2. `soak-smoke`: soak de 5 min con `tools/loadtest/run.sh --soak` en el
+     runner compartido de GitHub Actions — **no es una línea base de
+     rendimiento** (el hardware del runner varía y no es representativo; esa
+     línea base ya está fijada en B.4, medida en la VPS real). Es una red de
+     regresión: falla si aparecen errores/timeouts en un soak sostenido.
+- Ambos usan `-DORESHNEK_WITH_SQLITE=ON` (el único backend que no necesita
+  credenciales/servicio externo) — Postgres/Oracle quedan fuera de CI por
+  ahora, se siguen probando localmente con `ORESHNEK_PG_TEST_DSN`/
+  `ORESHNEK_ORACLE_TEST_DSN`.
 
 ---
 
@@ -475,8 +496,11 @@ filas 1 y 2 ya están cerradas.
    proceso. Bloqueante #1 cerrado. Único seguimiento no bloqueante: la cola
    de latencia a c=1000, atribuida al arnés de prueba (cliente `wrk` de un
    solo hilo en las VPS disponibles), no al framework.
-3. Integración de ambos en el pipeline de CI (job de fuzz corto por PR + soak/
-   fuzz largo nightly), cerrando el bloqueante #3.
+3. ✅ **CI** — completa: `.github/workflows/ci.yml` (build+ctest normal,
+   ASan/UBSan, TSan, fuzz de 120s por PR) y `nightly.yml` (fuzz de 25 min +
+   soak de 5 min, diario). Bloqueante #3 cerrado — ver sección "CI" arriba.
+
+Los tres bloqueantes de producción originales quedan cerrados.
 
 Todo el trabajo en una rama de feature; cada commit compila y mantiene verde el
 gate de sanitizers y `ctest`.

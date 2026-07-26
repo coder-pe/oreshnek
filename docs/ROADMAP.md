@@ -198,4 +198,11 @@ delegan a infraestructura especializada.
   `LOAD_AND_FUZZ_PLAN.md` B.4 — los 4 criterios cerrados. Único seguimiento
   no bloqueante: la cola de latencia a c=1000, atribuida al arnés de prueba
   (cliente `wrk` de un solo hilo), no al framework.
+- ✅ **CI**: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) en cada
+  PR/push a `main` (build+ctest normal, ASan/UBSan, TSan, fuzz de 120s) y
+  [`nightly.yml`](../.github/workflows/nightly.yml) diario (fuzz de 25 min +
+  soak de 5 min como red de regresión, sin ser línea base de rendimiento —
+  esa vive en `LOAD_AND_FUZZ_PLAN.md` B.4, medida en la VPS real). Cierra el
+  tercer y último bloqueante de producción de la evaluación original — los
+  tres (rendimiento, fuzzing, CI) quedan cerrados.
 - ⬜ Comparación con terceros tipo TechEmpower (fase posterior).

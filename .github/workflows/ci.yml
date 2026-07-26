@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build + ctest (normal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Configurar
+        run: cmake -B build -DORESHNEK_WITH_SQLITE=ON
+
+      - name: Compilar
+        run: cmake --build build -j"$(nproc)"
+
+      # Incluye fuzz_replay_test (corpus + regressions/ de tests/fuzz/, sin
+      # necesitar un clang con libFuzzer) como cualquier otro target de ctest.
+      - name: ctest
+        run: ctest --test-dir build --output-on-failure
+
+  asan-ubsan:
+    name: ctest bajo ASan + UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Configurar
+        run: cmake -B build-asan -DORESHNEK_ASAN=ON -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_BUILD_EXAMPLES=OFF
+
+      - name: Compilar
+        run: cmake --build build-asan -j"$(nproc)"
+
+      # LeakSanitizer viene activo por defecto junto a ASan en Linux.
+      - name: ctest
+        run: ctest --test-dir build-asan --output-on-failure
+
+  tsan:
+    name: ctest bajo ThreadSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev zlib1g-dev
+
+      - name: Configurar
+        run: cmake -B build-tsan -DORESHNEK_TSAN=ON -DORESHNEK_WITH_SQLITE=ON -DORESHNEK_BUILD_EXAMPLES=OFF
+
+      - name: Compilar
+        run: cmake --build build-tsan -j"$(nproc)"
+
+      - name: ctest
+        run: ctest --test-dir build-tsan --output-on-failure
+
+  fuzz-short:
+    name: Fuzzing corto (120s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev libsqlite3-dev zlib1g-dev clang
+
+      # Ver docs/DEPENDENCIES.md: el runtime de libFuzzer viene con clang en
+      # la mayoría de versiones de Ubuntu, pero no en todas — falla temprano
+      # y explícito en vez de con un error de enlazado confuso más adelante.
+      - name: Verificar runtime de libFuzzer
+        run: |
+          if ! find / -xdev -name 'libclang_rt.fuzzer*' 2>/dev/null | grep -q .; then
+            echo "::error::clang no trae el runtime de libFuzzer (compiler-rt). Ver docs/DEPENDENCIES.md."
+            exit 1
+          fi
+
+      - name: Configurar
+        run: |
+          cmake -B build-fuzz -DORESHNEK_FUZZ=ON -DORESHNEK_WITH_SQLITE=ON \
+            -DORESHNEK_BUILD_TESTS=OFF -DORESHNEK_BUILD_EXAMPLES=OFF \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Compilar fuzz_http_parser
+        run: cmake --build build-fuzz --target fuzz_http_parser -j"$(nproc)"
+
+      # corpus_growth/ (gitignored) va primero: ahí escribe libFuzzer los
+      # inputs que descubre, sin mezclarlos con las semillas versionadas de
+      # tests/fuzz/corpus/. Ver tests/fuzz/README.md.
+      - name: Campaña de 120s
+        run: |
+          mkdir -p tests/fuzz/corpus_growth
+          ./build-fuzz/fuzz_http_parser -max_total_time=120 -print_final_stats=1 \
+            tests/fuzz/corpus_growth tests/fuzz/corpus
+
+      - name: Subir reproductor de crash (si lo hay)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ github.run_id }}
+          path: crash-*
+          if-no-files-found: ignore
