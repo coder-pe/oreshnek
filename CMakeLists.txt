@@ -74,6 +74,15 @@ if(ORESHNEK_WITH_SQLITE)
     if(SQLITE3_FOUND)
         message(STATUS "Found SQLite3: ${SQLite3_VERSION}")
     endif()
+    # CMake's FindSQLite3 renamed its imported target from SQLite::SQLite3 to
+    # SQLite3::SQLite3 in CMake 4.3 (keeping the old name as a deprecated
+    # alias). On CMake < 4.3 (still the norm on most Linux distro package
+    # repos) only SQLite::SQLite3 exists, so link against SQLite3::SQLite3
+    # unconditionally would fail there. Shim per CMake's own docs so the rest
+    # of this file can use one name regardless of CMake version.
+    if(NOT TARGET SQLite3::SQLite3)
+        add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+    endif()
 endif()
 
 # PostgreSQL client (libpq). On macOS, Homebrew's libpq is keg-only, so hint its
