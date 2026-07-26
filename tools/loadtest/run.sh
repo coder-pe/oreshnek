@@ -242,8 +242,22 @@ if [ "$SOAK" -eq 0 ]; then
         -s "$SCRIPT_DIR/scripts/pipeline.lua" "$BASE_URL/" -- "$PIPELINE_DEPTH"
 
     # --- Escenario 3: estático + Range ------------------------------------------
-    run_wrk "static-range" 200 "$DURATION" \
-        -s "$SCRIPT_DIR/scripts/range.lua" "$BASE_URL/static/sample.txt"
+    # El fichero de prueba solo se crea automáticamente cuando este mismo
+    # run.sh arranca el servidor (rama SKIP_SERVER=0, más arriba). Si el
+    # servidor lo arrancaron a mano o corre en otra máquina (--skip-server),
+    # puede no existir — sin este chequeo, wrk igual "corre" pero devuelve
+    # 404 en el 100% de las peticiones, dejando un log que parece evidencia
+    # válida y no lo es.
+    if curl -sf -o /dev/null "$BASE_URL/static/sample.txt"; then
+        run_wrk "static-range" 200 "$DURATION" \
+            -s "$SCRIPT_DIR/scripts/range.lua" "$BASE_URL/static/sample.txt"
+    else
+        log "AVISO: $BASE_URL/static/sample.txt no responde 200 — omitiendo Escenario 3 (estático+Range)."
+        log "  Si el servidor lo arrancaste a mano (o con --skip-server), crea el fichero ahí:"
+        log "    mkdir -p static && yes 'oreshnek load test line' | head -n 200 > static/sample.txt"
+        echo "OMITIDO: $BASE_URL/static/sample.txt no respondió 200 (ver aviso en la consola de esta corrida)." \
+            > "$RESULTS_DIR/static-range.log"
+    fi
 
     {
         echo "# Resumen ($RUN_TS)"
@@ -251,7 +265,7 @@ if [ "$SOAK" -eq 0 ]; then
         for f in "$RESULTS_DIR"/throughput-c*.log "$RESULTS_DIR"/pipeline.log "$RESULTS_DIR"/static-range.log; do
             [ -f "$f" ] || continue
             echo "## $(basename "$f")"
-            grep -E 'Requests/sec|Latency|Socket errors|Non-2xx|^ +[0-9]+%' "$f" || true
+            grep -E 'Requests/sec|Latency|Socket errors|Non-2xx|OMITIDO|^ +[0-9]+%' "$f" || true
             echo
         done
     } > "$RESULTS_DIR/summary.md"

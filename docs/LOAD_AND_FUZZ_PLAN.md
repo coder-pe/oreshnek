@@ -24,7 +24,7 @@ sigue aquí es el diseño y la referencia general (incluye macOS).
 | A — Harness de fuzzing | ✅ Implementado | `tests/fuzz/` (harness, corpus, replay determinista en `ctest`); commit `c271ee8`. |
 | A — Campaña larga + evidencia archivada | ✅ Cerrado | Debian 13 (VPS), campaña de 30 min: **3 033 053 ejecuciones**, ~1684 exec/s, `new_units_added: 1449`, `peak_rss_mb: 525`, 0 crashes/leaks/UB (`grep` de patrones de sanitizer sobre el log completo → "limpio"). También se corrió una previa de 5 min, limpia igual (su log no quedó archivado por separado: ver nota abajo). Log: `tests/fuzz/campaigns/20260725-4c443e1.log`. |
 | B — Andamiaje de carga automatizado (`run.sh`) | ✅ Implementado | [`tools/loadtest/run.sh`](../tools/loadtest/run.sh) + `scripts/pipeline.lua` + `scripts/range.lua`; corre los 4 escenarios de B.3, portable macOS/Linux (probado en ambos). Uso: [`tools/loadtest/README.md`](../tools/loadtest/README.md). |
-| B — Línea base documentada | ✅ Cerrado (con una nota abierta) | Campaña pre-fix (2026-07-26) encontró un bug real: sin `TCP_NODELAY`, Nagle/delayed-ACK añadía ~40ms fijos a cada respuesta. Corregido (`fa9537a`/PR #29) y **re-corrido en el mismo VPS** (commit `5150a17`): 0 errores, RSS estable, mejoras de 6–29x en latencia/throughput según escenario — ver tabla en B.4. Pendiente menor: a c=1000 sigue una cola larga (p99 ~1s) sin relación con el fix; falta confirmar núcleos reales de la VPS para saber si es techo real de hardware o límite del cliente `wrk` (single-threaded ahí). |
+| B — Línea base documentada | ✅ Cerrado | Campaña pre-fix (2026-07-26) encontró un bug real: sin `TCP_NODELAY`, Nagle/delayed-ACK añadía ~40ms fijos a cada respuesta. Corregido (`fa9537a`/PR #29) y **re-corrido en el mismo VPS** (commit `5150a17`): 0 errores, RSS estable, mejoras de 6–29x en latencia/throughput según escenario — ver tabla en B.4. Investigada la cola a c=1000 invirtiendo servidor/cliente (el VPS original tiene 1 solo vCPU): no mejoró al darle más núcleos al servidor, así que el límite parece estar en el cliente `wrk` de un solo hilo, no en el framework — documentado como limitación del arnés de prueba, no bloqueante. |
 | CI | ⬜ Pendiente | No hay pipeline (`.github/workflows/` no existe); fuera de alcance de este documento. |
 
 ---
@@ -287,16 +287,44 @@ separados) repetida tras el fix de `TCP_NODELAY`:
   tráfico procesado en la misma ventana.
 - **B.4.4** (p99 no se dispara sin control por debajo de saturación): ✅ a
   c=50/200 (p99 de un dígito a low-double-digit ms en loopback, 35–110ms en
-  red real). **A c=1000 sigue habiendo una cola larga** (p99 ~1s) — igual de
-  larga que antes del fix, es decir, el fix de Nagle **no la tocó**: es un
-  problema distinto, probablemente el propio `wrk` limitado a 1 solo hilo en
-  esa VPS (`threads: 1` en `metadata.txt`) saturándose él mismo al manejar
-  1000 conexiones, o el VPS teniendo realmente 1 vCPU y estando ya en (o
-  más allá de) su punto de saturación a esa concurrencia. Pendiente:
-  confirmar núcleos reales de esa VPS (`nproc`) para interpretar si c=1000
-  es un techo real del hardware (resultado válido) o una limitación del
-  cliente de carga (repetir con `--threads` más alto o desde un cliente con
-  más núcleos).
+  red real). **A c=1000 sigue habiendo una cola larga** (p99 ~0.9–1.4s) en
+  todas las combinaciones probadas — no bloquea el cierre de B.4, pero queda
+  como limitación conocida de la infraestructura de prueba (ver siguiente
+  punto), no del framework.
+
+#### Investigación de la cola en c=1000: servidor/cliente invertidos
+
+"mail" (VPS servidor original) resultó tener **1 solo vCPU** (`nproc=1`,
+confirmado); la hipótesis era que el techo de c=1000 fuera ese único núcleo
+saturándose. Se probó invirtiendo los roles — servidor en la VPS de 6
+núcleos, "mail" como cliente — y **no mejoró** (p99 subió a 1.43s, si acaso
+peor). Como "mail" sigue siendo el cliente en esa combinación y sigue
+teniendo 1 solo hilo de `wrk` disponible, el dato no aísla la variable:
+
+| Cliente | Servidor | c=1000 p50 | c=1000 p99 |
+|---|---|---|---|
+| 6 núcleos | "mail" (1 vCPU) | 72.35ms | 861ms |
+| "mail" (1 vCPU) | 6 núcleos | 63.96ms | 1.43s |
+| MacBook M4 (10 hilos, red doméstica) | 6 núcleos | 259.70ms (ya a c=50) | 1.16s |
+
+Que darle 6 núcleos al servidor no haya mejorado la cola apunta a que el
+límite real está más del lado de `wrk` corriendo con 1 solo hilo (en
+cualquiera de las dos VPS que lo usaron de cliente) que en la capacidad del
+servidor. **Conclusión: no se persigue más sin una tercera máquina cliente
+con varios núcleos y buena conexión de red al servidor** (de la que no se
+dispone); c=1000 queda documentado como no concluyente por límite del
+arnés de prueba, no como defecto del framework. Los criterios B.4.1/B.4.2 no
+dependen de este escenario.
+
+**Sobre la MacBook como cliente**: p50 de ~220-260ms *desde c=50* no es el
+servidor ni el cliente — es la latencia real de red entre una máquina
+doméstica/oficina y el VPS (probablemente cientos/miles de km de distancia).
+Es un dato legítimo de "qué experimenta un usuario real conectándose desde
+esa ubicación", pero no es comparable con las corridas VPS-a-VPS: no se debe
+mezclar con la línea base de capacidad de B.4. Útil como categoría de
+medición aparte (experiencia de usuario final por geografía), no como
+benchmark de servidor.
+
 - **B.4.3** (503/load-shedding bajo saturación deliberada): sin correr
   todavía — ver Paso 4.4 en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`.
 
