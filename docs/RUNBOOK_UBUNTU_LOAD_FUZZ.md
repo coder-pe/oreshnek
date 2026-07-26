@@ -241,15 +241,25 @@ sostenida (columna 2, en KB) — oscilación acotada sí, crecimiento monótono
 no; el diff de `/metrics` debe mostrar `requests_total` creciendo acorde a lo
 que envió `wrk` y `workers_in_flight` de vuelta a su valor base.
 
-### 4.4 (Opcional) Escenario de saturación — confirma el load shedding
+### 4.4 Escenario de saturación — confirma el load shedding
 
-Para validar el criterio B.4.3 (503 bajo sobrecarga deliberada en vez de
-estancarse): copia `config/oreshnek.loadtest.json`, pon
-`rate_limit.enabled: true` con un `requests_per_second` bajo, y corre
-`tools/loadtest/run.sh --config esa-copia.json --concurrencies 500`; deberías
-ver `Non-2xx or 3xx responses` con `503` (esperado y correcto aquí, a
-diferencia de los Escenarios 1–3) y `load_shed_total` creciendo en
-`/metrics`.
+```bash
+tools/loadtest/run.sh --saturation
+```
+
+Valida el criterio B.4.3 (503 bajo sobrecarga deliberada en vez de
+estancarse). Usa automáticamente
+[`config/oreshnek.loadtest-saturation.json`](../config/oreshnek.loadtest-saturation.json)
+(`max_concurrent_handlers: 5`, deliberadamente bajo) y una concurrencia de
+500 por defecto — bien por encima del tope, para forzar el shedding.
+**Importante**: esto es `max_concurrent_handlers`, no `rate_limit` — el
+rate limiter responde `429 Too Many Requests` (otro mecanismo, para abuso
+por IP); el *load shedding* de este escenario responde `503 Service
+Unavailable` con `Retry-After`. `run.sh` te dice en `summary.md` exactamente
+qué mirar: `Non-2xx or 3xx responses` > 0 (son los 503 esperados aquí, a
+diferencia de los Escenarios 1–3), y en el diff de `/metrics`,
+`load_shed_total` creciendo junto con `responses_total{class="5xx"}` (no
+`class="4xx"`, que sería rate_limit).
 
 El servidor se detiene solo al terminar cada corrida (`SIGTERM` →
 `request_stop()`: deja de aceptar conexiones nuevas, drena las peticiones en
