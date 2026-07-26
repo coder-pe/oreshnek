@@ -183,10 +183,11 @@ comprobación.
 - **`metrics.diff`**: confirma que `requests_total`/`responses_total{class="2xx"}`
   crecieron acorde a lo que envió `wrk`, y que `workers_in_flight` volvió a su
   valor base (sin fuga de handlers).
-- Para el criterio B.4.3 (503/load-shedding bajo saturación deliberada), ver
-  la sección correspondiente en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md` (Paso 4.6)
-  — requiere `rate_limit.enabled: true` en la config, a propósito distinto de
-  la config de línea base.
+- Para el criterio B.4.3 (503/load-shedding bajo saturación deliberada):
+  `tools/loadtest/run.sh --saturation` (detalle en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`,
+  Paso 4.4). Usa automáticamente `config/oreshnek.loadtest-saturation.json`
+  (`max_concurrent_handlers` bajo) — **no** `rate_limit.enabled`, que es un
+  mecanismo distinto y responde `429`, no el `503` que este criterio busca.
 
 Una vez tengas una corrida completa y limpia, transcribe un resumen (no el
 log completo) a la tabla de línea base en la sección B.4 de

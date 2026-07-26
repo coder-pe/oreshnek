@@ -13,6 +13,7 @@
 # Uso:
 #   tools/loadtest/run.sh                          # escenarios 1-3, rapido
 #   tools/loadtest/run.sh --soak                    # escenario 4 (soak), largo
+#   tools/loadtest/run.sh --saturation              # 503/load-shedding (B.4.3)
 #   tools/loadtest/run.sh --url http://otra-ip:8080 --skip-server
 #   tools/loadtest/run.sh --help
 #
@@ -35,6 +36,9 @@ DURATION="30s"
 PIPELINE_DEPTH="16"
 SOAK=0
 SOAK_DURATION="20m"
+SATURATION=0
+SATURATION_CONCURRENCY="500"
+CONFIG_EXPLICIT=0
 SKIP_SERVER=0
 THREADS=""
 
@@ -51,7 +55,9 @@ Opciones:
   --binary PATH         Ruta al binario del servidor
                          (default: build/examples/07_config_server)
   --config PATH         Config a pasarle al servidor
-                         (default: config/oreshnek.loadtest.json)
+                         (default: config/oreshnek.loadtest.json; con
+                         --saturation y sin --config explícito, usa
+                         config/oreshnek.loadtest-saturation.json)
   --skip-server         No arrancar el servidor: asume que --url ya responde
                          (útil si lo arrancaste a mano o corre en otra máquina)
   --concurrencies "L"   Lista de concurrencias para el escenario 1, entre
@@ -62,6 +68,15 @@ Opciones:
                          (default: 16)
   --soak                Corre solo el escenario 4 (soak) en vez de 1-3
   --soak-duration DUR   Duración del soak, formato wrk (default: 20m)
+  --saturation          Corre solo el escenario de saturación/load-shedding
+                         (criterio B.4.3) en vez de 1-3: espera 503 y
+                         `load_shed_total` creciendo, no 429 (eso es
+                         rate_limit, otro mecanismo). Mutuamente excluyente
+                         con --soak.
+  --saturation-concurrency N
+                         Concurrencia para --saturation (default: 500;
+                         debe superar `max_concurrent_handlers` de la config
+                         para disparar el shedding)
   --threads N           Hilos de wrk (default: min(núcleos, concurrencia))
   --results-dir DIR     Dónde crear el subdirectorio de esta corrida
                          (default: tools/loadtest/results)
@@ -91,19 +106,32 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --url) BASE_URL="$2"; shift 2 ;;
         --binary) BINARY="$(resolve_path "$2")"; shift 2 ;;
-        --config) CONFIG="$(resolve_path "$2")"; shift 2 ;;
+        --config) CONFIG="$(resolve_path "$2")"; CONFIG_EXPLICIT=1; shift 2 ;;
         --skip-server) SKIP_SERVER=1; shift ;;
         --concurrencies) CONCURRENCIES="$2"; shift 2 ;;
         --duration) DURATION="$2"; shift 2 ;;
         --pipeline-depth) PIPELINE_DEPTH="$2"; shift 2 ;;
         --soak) SOAK=1; shift ;;
         --soak-duration) SOAK_DURATION="$2"; shift 2 ;;
+        --saturation) SATURATION=1; shift ;;
+        --saturation-concurrency) SATURATION_CONCURRENCY="$2"; shift 2 ;;
         --threads) THREADS="$2"; shift 2 ;;
         --results-dir) RESULTS_ROOT="$(resolve_path "$2")"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "opción desconocida: $1 (usa --help)" ;;
     esac
 done
+
+[ "$SOAK" -eq 1 ] && [ "$SATURATION" -eq 1 ] && die "--soak y --saturation son mutuamente excluyentes"
+
+# --saturation necesita max_concurrent_handlers bajo para disparar 503; si el
+# usuario no pidió una config explícita, usa la variante ya preparada para
+# esto en vez de la de línea base (que trae max_concurrent_handlers=0, sin
+# shedding — nunca dispararía el 503 que este modo busca confirmar).
+if [ "$SATURATION" -eq 1 ] && [ "$CONFIG_EXPLICIT" -eq 0 ]; then
+    CONFIG="$REPO_ROOT/config/oreshnek.loadtest-saturation.json"
+    log "--saturation: usando config/oreshnek.loadtest-saturation.json (max_concurrent_handlers bajo a propósito)"
+fi
 
 command -v wrk >/dev/null 2>&1 || die "wrk no está instalado — ver docs/DEPENDENCIES.md"
 command -v curl >/dev/null 2>&1 || die "curl no está instalado"
@@ -141,6 +169,8 @@ mkdir -p "$RESULTS_DIR"
     echo "concurrencies: $CONCURRENCIES"
     echo "duration: $DURATION"
     echo "soak: $SOAK (duration=$SOAK_DURATION)"
+    echo "saturation: $SATURATION (concurrency=$SATURATION_CONCURRENCY)"
+    echo "config: $CONFIG"
 } > "$RESULTS_DIR/metadata.txt"
 log "resultados en $RESULTS_DIR"
 
@@ -231,7 +261,7 @@ run_wrk() {
     wrk -t"$t" -c"$c" -d"$dur" --latency "$@" 2>&1 | tee "$RESULTS_DIR/$name.log"
 }
 
-if [ "$SOAK" -eq 0 ]; then
+if [ "$SOAK" -eq 0 ] && [ "$SATURATION" -eq 0 ]; then
     # --- Escenario 1: JSON caliente, concurrencia creciente -------------------
     for c in $CONCURRENCIES; do
         run_wrk "throughput-c${c}" "$c" "$DURATION" "$BASE_URL/"
@@ -268,6 +298,38 @@ if [ "$SOAK" -eq 0 ]; then
             grep -E 'Requests/sec|Latency|Socket errors|Non-2xx|OMITIDO|^ +[0-9]+%' "$f" || true
             echo
         done
+    } > "$RESULTS_DIR/summary.md"
+elif [ "$SATURATION" -eq 1 ]; then
+    # --- Escenario de saturación / load shedding (criterio B.4.3) ---------------
+    # Concurrencia bien por encima de max_concurrent_handlers: se espera 503
+    # (Service Unavailable) con Retry-After, no 429 (eso es rate_limit, un
+    # mecanismo distinto) ni timeouts/resets.
+    log "escenario: saturación (c=$SATURATION_CONCURRENCY, d=$DURATION) — confirma 503/load shedding"
+    curl -s "$BASE_URL/metrics" > "$RESULTS_DIR/metrics-antes.prom" || true
+
+    run_wrk "saturation" "$SATURATION_CONCURRENCY" "$DURATION" "$BASE_URL/"
+
+    curl -s "$BASE_URL/metrics" > "$RESULTS_DIR/metrics-despues.prom" || true
+    diff "$RESULTS_DIR/metrics-antes.prom" "$RESULTS_DIR/metrics-despues.prom" \
+        > "$RESULTS_DIR/metrics.diff" || true
+
+    {
+        echo "# Resumen saturación ($RUN_TS)"
+        echo
+        echo "## saturation.log"
+        grep -E 'Requests/sec|Latency|Socket errors|Non-2xx|^ +[0-9]+%' "$RESULTS_DIR/saturation.log" || true
+        echo
+        echo "## Qué mirar (criterio B.4.3)"
+        echo '- `Non-2xx or 3xx responses` en saturation.log debe ser > 0 — son los 503 esperados aquí'
+        echo '  (a diferencia de los Escenarios 1-3, donde cualquier error es un problema).'
+        echo '- En el diff de abajo, `oreshnek_load_shed_total` debe crecer, y'
+        echo '  `oreshnek_responses_total{class="5xx"}` también (no `class="4xx"` — eso'
+        echo '  sería rate_limit/429, un mecanismo distinto a este escenario).'
+        echo '- `workers_in_flight` debe volver a un valor acotado (<= max_concurrent_handlers'
+        echo '  de la config) al terminar, no quedar creciendo sin control.'
+        echo
+        echo "## diff de /metrics (antes -> después)"
+        cat "$RESULTS_DIR/metrics.diff" 2>/dev/null || echo "(sin diferencias o /metrics no disponible)"
     } > "$RESULTS_DIR/summary.md"
 else
     # --- Escenario 4: soak -------------------------------------------------------

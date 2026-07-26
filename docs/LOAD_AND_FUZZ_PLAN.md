@@ -325,8 +325,15 @@ mezclar con la línea base de capacidad de B.4. Útil como categoría de
 medición aparte (experiencia de usuario final por geografía), no como
 benchmark de servidor.
 
-- **B.4.3** (503/load-shedding bajo saturación deliberada): sin correr
-  todavía — ver Paso 4.4 en `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`.
+- **B.4.3** (503/load-shedding bajo saturación deliberada): ⬜ tooling listo
+  (`tools/loadtest/run.sh --saturation`, ver Paso 4.4 en
+  `docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md`), verificado localmente (503 +
+  `load_shed_total` creciendo, `responses_total{class="5xx"}` correcto). La
+  corrida en el VPS real que cierre este criterio queda pendiente. Nota: la
+  primera versión de esta guía decía erróneamente que había que activar
+  `rate_limit.enabled` — eso responde `429` (otro mecanismo, para abuso por
+  IP), no el `503` que este criterio necesita; corregido, usa
+  `max_concurrent_handlers` vía `config/oreshnek.loadtest-saturation.json`.
 
 ### B.5 Comparación honesta con terceros (opcional, fase posterior)
 
