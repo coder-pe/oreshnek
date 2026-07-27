@@ -295,18 +295,18 @@ CI/release si prefieres no engordar el repo con corridas frecuentes.
   Ubuntu/Debian; usa el fallback de compilar desde fuente del Paso 1.
 - **`tools/loadtest/run.sh` sale con "el servidor no respondió /health en
   30s"**: revisa `tools/loadtest/results/<timestamp>/server.log` (errores de
-  arranque van ahí); causa típica es el puerto 8080 ya ocupado por una
-  corrida anterior — `ss -tlnp | grep 8080` para ver quién lo tiene y `kill`
+  arranque van ahí); causa típica es el puerto 9090 ya ocupado por una
+  corrida anterior — `ss -tlnp | grep 9090` para ver quién lo tiene y `kill`
   ese proceso, o `pkill -f 07_config_server` si es un `07_config_server`
   colgado de antes.
 - **Probar desde otra máquina, no desde el propio VPS**: por defecto este
   runbook asume que `wrk` corre en el mismo VPS contra `127.0.0.1` (sin tocar
   el firewall). Si de verdad necesitas pegarle desde fuera, abre el puerto
   con cuidado y ciérralo después: `sudo ufw allow from <IP-del-cliente> to
-  any port 8080 proto tcp`, y `sudo ufw delete allow from <IP-del-cliente> to
-  any port 8080 proto tcp` al terminar. No dejes el puerto abierto a
+  any port 9090 proto tcp`, y `sudo ufw delete allow from <IP-del-cliente> to
+  any port 9090 proto tcp` al terminar. No dejes el puerto abierto a
   `0.0.0.0/0` en un VPS con datos reales.
-- **`tools/loadtest/run.sh --skip-server --url http://<ip-vps>:8080` dice
+- **`tools/loadtest/run.sh --skip-server --url http://<ip-vps>:9090` dice
   "`/health` no responde"**: casi siempre son **dos firewalls, no uno**. El
   `ufw allow` de arriba abre el del sistema operativo, pero la mayoría de
   proveedores VPS (DigitalOcean, Vultr, Hetzner, AWS Security Groups, GCP
@@ -321,3 +321,19 @@ CI/release si prefieres no engordar el repo con corridas frecuentes.
   `dmesg | tail` por si el OOM killer intervino; baja la concurrencia
   (`-c200` → `-c50`) y el `thread_pool_size` de
   `config/oreshnek.loadtest.json` antes de repetir.
+- **El servidor imprime `Too many open files` bajo carga alta (c=1000), y el
+  cliente reporta `Socket errors: ... timeout N` (sin `connect`/`read`/`write`,
+  solo `timeout`)**: es el `ulimit -n` del proceso servidor, no un bug ni un
+  problema de red. `tools/loadtest/run.sh` sube este límite automáticamente
+  cuando **él mismo** arranca el servidor (Paso 4.2), pero si lo arrancaste a
+  mano —típico cuando el servidor y el cliente están en máquinas distintas—
+  hereda el límite por defecto de esa sesión de shell (a menudo 1024), que se
+  agota alrededor de c=1000. Antes de arrancarlo a mano:
+  ```bash
+  ulimit -n 65536
+  ./build/examples/07_config_server config/oreshnek.loadtest.json
+  ```
+  Para que quede permanente entre sesiones, agrega en
+  `/etc/security/limits.conf`: `<usuario> soft nofile 65536` y
+  `<usuario> hard nofile 65536` (o `LimitNOFILE=65536` si el servidor corre
+  como servicio `systemd`).

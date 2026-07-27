@@ -14,7 +14,7 @@
 #   tools/loadtest/run.sh                          # escenarios 1-3, rapido
 #   tools/loadtest/run.sh --soak                    # escenario 4 (soak), largo
 #   tools/loadtest/run.sh --saturation              # 503/load-shedding (B.4.3)
-#   tools/loadtest/run.sh --url http://otra-ip:8080 --skip-server
+#   tools/loadtest/run.sh --url http://otra-ip:9090 --skip-server
 #   tools/loadtest/run.sh --help
 #
 # Salida de --help para el detalle de todas las flags.
@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # --- Valores por defecto ------------------------------------------------------
-BASE_URL="http://127.0.0.1:8080"
+BASE_URL="http://127.0.0.1:9090"
 BINARY="$REPO_ROOT/build/examples/07_config_server"
 CONFIG="$REPO_ROOT/config/oreshnek.loadtest.json"
 RESULTS_ROOT="$REPO_ROOT/tools/loadtest/results"
@@ -51,7 +51,7 @@ contra examples/07_config_server y archiva evidencia en
 tools/loadtest/results/<timestamp>/.
 
 Opciones:
-  --url URL             Base URL del servidor (default: http://127.0.0.1:8080)
+  --url URL             Base URL del servidor (default: http://127.0.0.1:9090)
   --binary PATH         Ruta al binario del servidor
                          (default: build/examples/07_config_server)
   --config PATH         Config a pasarle al servidor
@@ -231,16 +231,16 @@ else
 
 Checklist (a correr en la máquina que sirve $BASE_URL, no en esta):
   1. ¿El proceso está corriendo?        pgrep -fa 07_config_server
-  2. ¿Responde en localhost?            curl -sf http://127.0.0.1:8080/health
+  2. ¿Responde en localhost?            curl -sf http://127.0.0.1:9090/health
      (si esto SÍ funciona pero desde afuera no, es un problema de red/firewall,
      no de la aplicación)
-  3. ¿Escucha en 0.0.0.0, no en 127.0.0.1?   ss -tlnp | grep 8080
+  3. ¿Escucha en 0.0.0.0, no en 127.0.0.1?   ss -tlnp | grep 9090
   4. ¿El firewall del SO deja pasar el puerto?
-       ufw:      sudo ufw status | grep 8080
-       iptables: sudo iptables -L -n | grep 8080
+       ufw:      sudo ufw status | grep 9090
+       iptables: sudo iptables -L -n | grep 9090
   5. Firewall/Security Group del proveedor cloud (aparte del firewall del
      SO) — revisa el panel del proveedor; muchos bloquean todo menos
-     22/80/443 hacia afuera por defecto y hay que abrir 8080 a mano.
+     22/80/443 hacia afuera por defecto y hay que abrir 9090 a mano.
   6. --url tiene host y puerto correctos, y usa http:// salvo que
      tls.enabled=true en la config del servidor (entonces es https://)."
     log "$BASE_URL responde"

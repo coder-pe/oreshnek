@@ -2,7 +2,7 @@
   "_comment": "Variante de config/oreshnek.loadtest.json para el escenario de saturacion/load-shedding (criterio B.4.3 de docs/LOAD_AND_FUZZ_PLAN.md): max_concurrent_handlers bajo a proposito para forzar 503 bajo concurrencia alta. NO usar en produccion ni para los escenarios 1-3 (ahi el objetivo es medir el techo real, no el shedding). Ver docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md Paso 4.4.",
 
   "host": "0.0.0.0",
-  "port": 8080,
+  "port": 9090,
   "thread_pool_size": 8,
   "max_connections": 4096,
 

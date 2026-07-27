@@ -126,12 +126,17 @@ producción):
 
 ```bash
 # En el VPS (servidor) — el fichero de static/ hay que crearlo a mano, ver
-# el aviso más abajo:
+# el aviso más abajo. El ulimit -n también: run.sh solo lo sube cuando es
+# él quien arranca el servidor; arrancado a mano, hereda el límite de la
+# sesión de shell (a menudo 1024) y a concurrencias altas (c=1000) se agota
+# ("Too many open files" en la terminal del servidor, timeouts del lado del
+# cliente — no errores de conexión).
+ulimit -n 65536
 mkdir -p static && yes 'oreshnek load test line' | head -n 200 > static/sample.txt
 ./build/examples/07_config_server config/oreshnek.loadtest.json
 
 # En la máquina cliente (con wrk instalado, ver Paso 1):
-tools/loadtest/run.sh --skip-server --url http://<ip-del-vps>:8080
+tools/loadtest/run.sh --skip-server --url http://<ip-del-vps>:9090
 ```
 
 Abre el puerto solo para la IP del cliente y ciérralo al terminar (ver
@@ -153,10 +158,21 @@ el del sistema operativo (`ufw`/`iptables`, cubierto arriba) y, aparte, el
 Firewall en GCP/DigitalOcean/Hetzner/Vultr, NSG en Azure, etc.) — este último
 bloquea el tráfico *antes* de que llegue siquiera al SO, así que un `ufw
 allow` correcto no basta si el proveedor lo sigue descartando. Revisa el
-panel de control del proveedor y agrega una regla de entrada para TCP/8080
+panel de control del proveedor y agrega una regla de entrada para TCP/9090
 (o el puerto que uses) además de la de `ufw`. `run.sh` con `--skip-server`
 te muestra un checklist de diagnóstico paso a paso cuando falla esta
 comprobación.
+
+**Si el servidor arrancado a mano imprime `Too many open files` bajo carga
+alta (c=1000), y el cliente ve `Socket errors: ... timeout N` (no
+`connect`/`read`/`write`) sin ningún error de conexión** — es el límite de
+file descriptors del proceso (`ulimit -n`), no un bug ni un problema de red.
+`run.sh` sube este límite automáticamente cuando **él mismo** arranca el
+servidor (rama sin `--skip-server`), pero un servidor arrancado a mano
+hereda el límite de esa sesión de shell (a menudo 1024) y lo agota
+alrededor de c=1000. Fix: `ulimit -n 65536` en la shell donde arrancas el
+servidor **antes** de lanzarlo (o `LimitNOFILE=` si corre bajo `systemd`,
+o `/etc/security/limits.conf` para que quede permanente).
 
 ## 3. Interpretar los resultados (criterios B.4 del plan)
 

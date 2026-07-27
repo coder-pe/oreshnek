@@ -2,7 +2,7 @@
   "_comment": "Config para pruebas de carga (wrk) contra examples/07_config_server. NO usar en produccion: JWT secret de ejemplo, rate limiting deshabilitado a proposito para medir el techo real del servidor. Ver docs/RUNBOOK_UBUNTU_LOAD_FUZZ.md.",
 
   "host": "0.0.0.0",
-  "port": 8080,
+  "port": 9090,
   "thread_pool_size": 8,
   "max_connections": 4096,
 
